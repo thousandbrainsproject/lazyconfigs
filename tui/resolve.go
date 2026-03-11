@@ -141,6 +141,7 @@ func resolveFileRecursive(filePath, confDir string, visited map[string]bool) (ma
 		}
 
 		childPath := resolveFilePath(entry, filePath, confDir)
+		childPath, _ = filepath.Abs(childPath)
 
 		if visited[childPath] {
 			continue // cycle — skip
@@ -178,9 +179,14 @@ func resolveFileRecursive(filePath, confDir string, visited map[string]bool) (ma
 // resolveFile is the public entry point. It resolves a Hydra config file and
 // returns the result as a YAML string.
 func resolveFile(filePath, confDir string) (string, error) {
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", fmt.Errorf("resolving path %s: %w", filePath, err)
+	}
+
 	visited := make(map[string]bool)
-	visited[filePath] = true
-	result, _, err := resolveFileRecursive(filePath, confDir, visited)
+	visited[absPath] = true
+	result, _, err := resolveFileRecursive(absPath, confDir, visited)
 	if err != nil {
 		return "", err
 	}

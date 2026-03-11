@@ -8,7 +8,7 @@ import (
 	"github.com/rivo/tview"
 )
 
-func generateDiff(fromContent, toContent, fromLabel, toLabel string) string {
+func generateDiff(fromContent, toContent, fromLabel, toLabel string) (string, error) {
 	diff := difflib.UnifiedDiff{
 		A:        difflib.SplitLines(fromContent),
 		B:        difflib.SplitLines(toContent),
@@ -16,13 +16,18 @@ func generateDiff(fromContent, toContent, fromLabel, toLabel string) string {
 		ToFile:   toLabel,
 		Context:  3,
 	}
-	text, _ := difflib.GetUnifiedDiffString(diff)
-	return text
+	return difflib.GetUnifiedDiffString(diff)
 }
 
 func colorizeDiff(diffText string) string {
+	lines := strings.Split(diffText, "\n")
+	// strings.Split produces a trailing empty element when input ends with "\n"
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
 	var buf strings.Builder
-	for _, line := range strings.Split(diffText, "\n") {
+	for _, line := range lines {
 		escaped := tview.Escape(line)
 		switch {
 		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):

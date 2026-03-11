@@ -231,6 +231,16 @@ func (a *App) refreshVariantsSelection(selectedIdx int) {
 // populateVariants reads variant files from the node's package directory
 // and populates the variants panel.
 func (a *App) populateVariants(node *TreeNode) {
+	// Reset diff state — the variant list is about to change, so diffFromIdx
+	// and diffFromFile would become stale.
+	if a.diffMode {
+		a.diffMode = false
+		a.diffFromIdx = -1
+		a.diffFromFile = ""
+		a.variantsPanel.SetTitle(" [2] Variants ")
+		a.updateStatusBar()
+	}
+
 	a.variantsPanel.Clear()
 	a.variantFiles = nil
 	a.variantDir = ""
@@ -470,7 +480,7 @@ func (a *App) setupKeybindings() {
 					return nil
 				}
 			case 'w':
-				if a.currentPanelIdx == 1 {
+				if a.currentPanelIdx == 1 && !a.diffMode {
 					a.enterDiffMode()
 					return nil
 				}

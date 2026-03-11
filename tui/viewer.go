@@ -94,21 +94,36 @@ func (a *App) updateViewer(node *TreeNode) {
 
 // updateViewerDiff generates and displays a unified diff between two files.
 func (a *App) updateViewerDiff(fromPath, toPath string) {
-	var fromContent, toContent string
-	if a.resolvedMode {
-		fromContent, _ = resolveFile(fromPath, a.confDir)
-		toContent, _ = resolveFile(toPath, a.confDir)
-	} else {
-		fromData, _ := os.ReadFile(fromPath)
-		toData, _ := os.ReadFile(toPath)
-		fromContent = string(fromData)
-		toContent = string(toData)
+	readContent := func(path string) (string, error) {
+		if a.resolvedMode {
+			return resolveFile(path, a.confDir)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("reading %s: %w", filepath.Base(path), err)
+		}
+		return string(data), nil
+	}
+
+	fromContent, err := readContent(fromPath)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error loading from-file: %s[-]", tview.Escape(err.Error())))
+		return
+	}
+	toContent, err := readContent(toPath)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error loading to-file: %s[-]", tview.Escape(err.Error())))
+		return
 	}
 
 	if fromContent == toContent {
 		a.viewerPanel.SetText("[darkgray]Files are identical[-]")
 	} else {
-		diff := generateDiff(fromContent, toContent, filepath.Base(fromPath), filepath.Base(toPath))
+		diff, err := generateDiff(fromContent, toContent, filepath.Base(fromPath), filepath.Base(toPath))
+		if err != nil {
+			a.viewerPanel.SetText(fmt.Sprintf("[red]Diff error: %s[-]", tview.Escape(err.Error())))
+			return
+		}
 		a.viewerPanel.SetText(colorizeDiff(diff))
 	}
 	a.viewerPanel.ScrollToBeginning()
