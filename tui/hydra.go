@@ -11,10 +11,11 @@ import (
 
 // DefaultEntry represents a single item in a Hydra defaults: list.
 type DefaultEntry struct {
-	Key      string // e.g. "monty", "motor_system_config"
-	Value    string // e.g. "informed_5_evidence1_camera_dist1"
-	Absolute bool   // true if key had "/" prefix
-	RawKey   string // original key for display (e.g. "/monty" or "config")
+	Key         string // e.g. "monty", "motor_system_config"
+	Value       string // e.g. "informed_5_evidence1_camera_dist1"
+	Absolute    bool   // true if key had "/" prefix
+	RawKey      string // original key for display (e.g. "/monty" or "config")
+	PackagePath string // portion after @ in raw key (e.g., "learning_module_0.learning_module_args")
 }
 
 // TreeNode represents a node in the hierarchical config tree.
@@ -107,8 +108,9 @@ func parseDefaults(filePath string) ([]DefaultEntry, error) {
 			}
 
 			key := k
-			// Handle @ suffix — strip everything from @ onward
+			// Handle @ suffix — extract package path and strip from key
 			if atIdx := strings.Index(key, "@"); atIdx >= 0 {
+				entry.PackagePath = key[atIdx+1:]
 				key = key[:atIdx]
 			}
 

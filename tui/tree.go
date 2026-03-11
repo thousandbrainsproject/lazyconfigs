@@ -94,7 +94,17 @@ func renderItem(node *TreeNode, selected bool) string {
 
 // renderVariantItem produces a display string for a variant list item.
 // cursorSelected indicates the cursor is on this item; isActive indicates this is the currently selected variant.
-func renderVariantItem(name string, cursorSelected bool, isActive bool) string {
+func renderVariantItem(name string, cursorSelected bool, isActive bool, isDiffFrom bool) string {
+	if isDiffFrom {
+		prefix := "  "
+		if isActive {
+			prefix = "* "
+		}
+		if cursorSelected {
+			return fmt.Sprintf("[#ff69b4::b]%s%s[-:-:-]", prefix, name)
+		}
+		return fmt.Sprintf("[#ff69b4]%s%s[-]", prefix, name)
+	}
 	switch {
 	case isActive && cursorSelected:
 		return fmt.Sprintf("[green::b]* %s[-:-:-]", name)

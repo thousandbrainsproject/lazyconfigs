@@ -37,6 +37,12 @@ type App struct {
 	variantFiles        []string
 	variantDir          string
 
+	resolvedMode bool
+
+	diffMode     bool
+	diffFromIdx  int
+	diffFromFile string
+
 	helpOpen        bool
 	confirmOpen     bool
 	renameOpen      bool
@@ -111,9 +117,14 @@ func newApp() *App {
 
 	variantsPanel.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		a.refreshVariantsSelection(index)
-		if a.currentPanelIdx == 1 && index >= 0 && index < len(a.variantFiles) {
-			variantPath := filepath.Join(a.variantDir, a.variantFiles[index]+".yaml")
-			a.updateViewer(&TreeNode{FilePath: variantPath})
+		if a.currentPanelIdx == 1 {
+			if a.diffMode && index >= 0 && index < len(a.variantFiles) {
+				currentPath := filepath.Join(a.variantDir, a.variantFiles[index]+".yaml")
+				a.updateViewerDiff(a.diffFromFile, currentPath)
+			} else if index >= 0 && index < len(a.variantFiles) {
+				variantPath := filepath.Join(a.variantDir, a.variantFiles[index]+".yaml")
+				a.updateViewer(&TreeNode{FilePath: variantPath})
+			}
 		}
 	})
 
@@ -170,8 +181,10 @@ func (a *App) refreshAll() {
 		a.variantDir = ""
 	}
 
-	// Viewer placeholder
-	a.viewerPanel.SetText("[darkgray]Select a config to preview[-]")
+	// Viewer placeholder only if nothing is selected
+	if len(a.flatItems) == 0 {
+		a.viewerPanel.SetText("[darkgray]Select a config to preview[-]")
+	}
 }
 
 func (a *App) rebuildBuilderList() {
@@ -210,7 +223,8 @@ func (a *App) refreshVariantsSelection(selectedIdx int) {
 		if i >= a.variantsPanel.GetItemCount() {
 			break
 		}
-		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx, name == activeValue), "")
+		isDiffFrom := a.diffMode && i == a.diffFromIdx
+		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx, name == activeValue, isDiffFrom), "")
 	}
 }
 
@@ -238,7 +252,7 @@ func (a *App) populateVariants(node *TreeNode) {
 	activeIdx := -1
 	for i, name := range variants {
 		isActive := name == node.Value
-		a.variantsPanel.AddItem(renderVariantItem(name, i == 0, isActive), "", 0, nil)
+		a.variantsPanel.AddItem(renderVariantItem(name, i == 0, isActive, false), "", 0, nil)
 		if isActive {
 			activeIdx = i
 		}
@@ -289,6 +303,52 @@ func (a *App) findBuilderNodeIndex(sourceFile, key string) int {
 		}
 	}
 	return -1
+}
+
+// refreshCurrentViewer re-renders the viewer based on the current panel and selection.
+func (a *App) refreshCurrentViewer() {
+	switch a.currentPanelIdx {
+	case 0:
+		idx := a.builderPanel.GetCurrentItem()
+		if idx >= 0 && idx < len(a.flatItems) {
+			a.updateViewer(a.flatItems[idx])
+		}
+	case 1:
+		variantIdx := a.variantsPanel.GetCurrentItem()
+		if variantIdx >= 0 && variantIdx < len(a.variantFiles) {
+			if a.diffMode {
+				currentPath := filepath.Join(a.variantDir, a.variantFiles[variantIdx]+".yaml")
+				a.updateViewerDiff(a.diffFromFile, currentPath)
+			} else {
+				variantPath := filepath.Join(a.variantDir, a.variantFiles[variantIdx]+".yaml")
+				a.updateViewer(&TreeNode{FilePath: variantPath})
+			}
+		}
+	}
+}
+
+func (a *App) enterDiffMode() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.variantFiles) {
+		return
+	}
+	a.diffMode = true
+	a.diffFromIdx = idx
+	a.diffFromFile = filepath.Join(a.variantDir, a.variantFiles[idx]+".yaml")
+	a.variantsPanel.SetTitle(" [2] Variants [yellow::b]diff[-:-:-] ")
+	a.refreshVariantsSelection(idx)
+	a.viewerPanel.SetText("[darkgray]Navigate to another variant to see diff[-]")
+	a.updateStatusBar()
+}
+
+func (a *App) exitDiffMode() {
+	a.diffMode = false
+	a.diffFromIdx = -1
+	a.diffFromFile = ""
+	a.variantsPanel.SetTitle(" [2] Variants ")
+	a.refreshVariantsSelection(a.variantsPanel.GetCurrentItem())
+	a.refreshCurrentViewer()
+	a.updateStatusBar()
 }
 
 func (a *App) toggleExpand() {
@@ -385,30 +445,39 @@ func (a *App) setupKeybindings() {
 				a.showHelp()
 				return nil
 			case ' ':
-				if a.currentPanelIdx == 1 {
+				if a.currentPanelIdx == 1 && !a.diffMode {
 					a.selectVariant()
 					return nil
 				}
 			case 'd':
-				if a.currentPanelIdx == 1 {
+				if a.currentPanelIdx == 1 && !a.diffMode {
 					a.duplicateVariant()
 					return nil
 				}
 			case 'r':
-				if a.currentPanelIdx == 1 {
+				if a.currentPanelIdx == 1 && !a.diffMode {
 					a.showRenameModal()
 					return nil
 				}
 			case 'D':
-				if a.currentPanelIdx == 1 {
+				if a.currentPanelIdx == 1 && !a.diffMode {
 					a.showDeleteConfirm()
 					return nil
 				}
 			case 'e':
-				if a.currentPanelIdx == 1 {
+				if a.currentPanelIdx == 1 && !a.diffMode {
 					a.editVariantInEditor()
 					return nil
 				}
+			case 'w':
+				if a.currentPanelIdx == 1 {
+					a.enterDiffMode()
+					return nil
+				}
+			case 'v':
+				a.resolvedMode = !a.resolvedMode
+				a.refreshCurrentViewer()
+				return nil
 			}
 		case tcell.KeyEnter:
 			if a.currentPanelIdx == 0 {
@@ -422,6 +491,10 @@ func (a *App) setupKeybindings() {
 			a.prevPanel()
 			return nil
 		case tcell.KeyEsc:
+			if a.diffMode {
+				a.exitDiffMode()
+				return nil
+			}
 			a.app.Stop()
 			return nil
 		}
@@ -433,27 +506,16 @@ func (a *App) focusPanel(idx int) {
 	if idx < 0 || idx >= len(a.panels) {
 		return
 	}
+	if a.diffMode && idx != 1 {
+		a.exitDiffMode()
+	}
 	a.currentPanelIdx = idx
 	a.app.SetFocus(a.panels[a.currentPanelIdx])
 	a.updateBorderColors()
 	a.updateStatusBar()
 
 	// Switch viewer content based on focused panel
-	switch idx {
-	case 0:
-		// Builder panel: show selected builder node
-		builderIdx := a.builderPanel.GetCurrentItem()
-		if builderIdx >= 0 && builderIdx < len(a.flatItems) {
-			a.updateViewer(a.flatItems[builderIdx])
-		}
-	case 1:
-		// Variants panel: show highlighted variant file
-		variantIdx := a.variantsPanel.GetCurrentItem()
-		if variantIdx >= 0 && variantIdx < len(a.variantFiles) {
-			variantPath := filepath.Join(a.variantDir, a.variantFiles[variantIdx]+".yaml")
-			a.updateViewer(&TreeNode{FilePath: variantPath})
-		}
-	}
+	a.refreshCurrentViewer()
 }
 
 func (a *App) nextPanel() {
@@ -505,15 +567,17 @@ func (a *App) scrollViewerUp() {
 	}
 }
 
-var statusBarTexts = map[int]string{
-	0: " Navigate: j/k | Expand/Collapse: Enter | Panels: h/l | Scroll Viewer: J/K | Help: ? | Quit: q",
-	1: " Navigate: j/k | Select: Space | Dup: d | Rename: r | Delete: D | Edit: e | Help: ? | Quit: q",
-}
-
 func (a *App) updateStatusBar() {
-	if text, ok := statusBarTexts[a.currentPanelIdx]; ok {
-		a.statusBarLeft.SetText(text)
-	} else {
+	switch a.currentPanelIdx {
+	case 0:
+		a.statusBarLeft.SetText(" Navigate: j/k | Expand: Enter | Panels: h/l | Scroll: J/K | Resolve: v | Help: ? | Quit: q")
+	case 1:
+		if a.diffMode {
+			a.statusBarLeft.SetText(" Navigate: j/k | Scroll: J/K | Resolve: v | Exit diff: Esc | Help: ? | Quit: q")
+		} else {
+			a.statusBarLeft.SetText(" Navigate: j/k | Select: Space | Dup: d | Rename: r | Del: D | Edit: e | Resolve: v | Diff: w | Help: ?")
+		}
+	default:
 		a.statusBarLeft.SetText(fmt.Sprintf(" Panel %d", a.currentPanelIdx))
 	}
 }
@@ -540,6 +604,7 @@ var panelHelpTexts = map[int]string{
 
 [green]Viewer:[-]
   J / K         Scroll viewer
+  v             Toggle resolved view
 
 [green]General:[-]
   ?             This help
@@ -562,13 +627,15 @@ var panelHelpTexts = map[int]string{
   r             Rename variant
   D             Delete variant (confirm)
   e             Edit in $EDITOR
+  v             Toggle resolved view
+  w             Diff from this variant
 
 [green]Viewer:[-]
   J / K         Scroll viewer
 
 [green]General:[-]
   ?             This help
-  Esc           Close overlay
+  Esc           Exit diff / Close overlay
   q             Quit
 
 [darkgray]Press Escape to close[-]`,
@@ -589,7 +656,7 @@ func (a *App) showHelp() {
 		SetTitle(panelHelpTitles[a.currentPanelIdx]).
 		SetBorderColor(tcell.ColorGreen)
 
-	a.pages.AddPage("help", modal(helpView, 55, 18), true, true)
+	a.pages.AddPage("help", modal(helpView, 55, 22), true, true)
 	a.app.SetFocus(helpView)
 }
 
