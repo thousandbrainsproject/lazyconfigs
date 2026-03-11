@@ -29,8 +29,11 @@ func deepMerge(base, overlay map[string]interface{}) map[string]interface{} {
 }
 
 // setNestedKey places value at a dot-separated path within m, creating
-// intermediate maps as needed.
+// intermediate maps as needed. dotPath must be non-empty.
 func setNestedKey(m map[string]interface{}, dotPath string, value interface{}) {
+	if dotPath == "" {
+		return
+	}
 	parts := strings.Split(dotPath, ".")
 	current := m
 	for _, part := range parts[:len(parts)-1] {
@@ -126,8 +129,8 @@ func resolveFileRecursive(filePath, confDir string, visited map[string]bool) (ma
 		raw = make(map[string]interface{})
 	}
 
-	// Extract and remove defaults
-	entries, err := parseDefaults(filePath)
+	// Extract and remove defaults (reuse already-loaded data)
+	entries, err := parseDefaultsFromData(data)
 	if err != nil {
 		return nil, "", fmt.Errorf("parsing defaults in %s: %w", filePath, err)
 	}

@@ -70,7 +70,11 @@ func parseDefaults(filePath string) ([]DefaultEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseDefaultsFromData(data)
+}
 
+// parseDefaultsFromData extracts defaults entries from already-loaded YAML data.
+func parseDefaultsFromData(data []byte) ([]DefaultEntry, error) {
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, err

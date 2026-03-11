@@ -58,9 +58,13 @@ func (a *App) updateViewer(node *TreeNode) {
 		resolved, err := resolveFile(node.FilePath, a.confDir)
 		if err != nil {
 			// Fall back to raw with error banner
-			data, _ := os.ReadFile(node.FilePath)
-			rawHighlighted := highlightCode(string(data), "yaml")
-			a.viewerPanel.SetText(fmt.Sprintf("[red]Resolution error: %s[-]\n\n%s", tview.Escape(err.Error()), rawHighlighted))
+			data, readErr := os.ReadFile(node.FilePath)
+			if readErr != nil {
+				a.viewerPanel.SetText(fmt.Sprintf("[red]Resolution error: %s[-]\n[red]Also failed to read raw file: %s[-]", tview.Escape(err.Error()), tview.Escape(readErr.Error())))
+			} else {
+				rawHighlighted := highlightCode(string(data), "yaml")
+				a.viewerPanel.SetText(fmt.Sprintf("[red]Resolution error: %s[-]\n\n%s", tview.Escape(err.Error()), rawHighlighted))
+			}
 		} else {
 			highlighted = highlightCode(resolved, "yaml")
 			a.viewerPanel.SetText(highlighted)

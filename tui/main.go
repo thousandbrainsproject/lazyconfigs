@@ -10,13 +10,6 @@ import (
 	"github.com/rivo/tview"
 )
 
-func init() {
-	tview.Borders.TopLeft = '╭'
-	tview.Borders.TopRight = '╮'
-	tview.Borders.BottomLeft = '╰'
-	tview.Borders.BottomRight = '╯'
-}
-
 type App struct {
 	app             *tview.Application
 	pages           *tview.Pages
@@ -57,6 +50,11 @@ type App struct {
 }
 
 func newApp() *App {
+	tview.Borders.TopLeft = '╭'
+	tview.Borders.TopRight = '╮'
+	tview.Borders.BottomLeft = '╰'
+	tview.Borders.BottomRight = '╯'
+
 	builderPanel := tview.NewList().
 		ShowSecondaryText(false).
 		SetHighlightFullLine(true).
@@ -95,9 +93,17 @@ func newApp() *App {
 	statusBarRight.SetBorder(false)
 	statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] 0.0.1 ")
 
-	exe, _ := os.Executable()
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot determine executable path: %v\n", err)
+		exe, _ = os.Getwd()
+	}
 	exeDir := filepath.Dir(exe)
-	confDir, _ := filepath.Abs(filepath.Join(exeDir, "..", "conf"))
+	confDir, err := filepath.Abs(filepath.Join(exeDir, "..", "conf"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot resolve conf directory: %v\n", err)
+		confDir = filepath.Join(exeDir, "..", "conf")
+	}
 
 	a := &App{
 		app:           tview.NewApplication(),
@@ -291,11 +297,18 @@ func (a *App) populateVariants(node *TreeNode) {
 
 	activeIdx := -1
 	for i, name := range variants {
-		isActive := name == node.Value
-		a.variantsPanel.AddItem(renderVariantItem(name, i == 0, isActive, false), "", 0, nil)
-		if isActive {
+		if name == node.Value {
 			activeIdx = i
 		}
+	}
+
+	cursorIdx := activeIdx
+	if cursorIdx < 0 {
+		cursorIdx = 0
+	}
+	for i, name := range variants {
+		isActive := name == node.Value
+		a.variantsPanel.AddItem(renderVariantItem(name, i == cursorIdx, isActive, false), "", 0, nil)
 	}
 
 	// Auto-scroll to active variant
@@ -607,7 +620,10 @@ func (a *App) prevPanel() {
 
 func (a *App) updateBorderColors() {
 	for i, panel := range a.panels {
-		list := panel.(*tview.List)
+		list, ok := panel.(*tview.List)
+		if !ok {
+			continue
+		}
 		if i == a.currentPanelIdx {
 			list.SetBorderColor(tcell.ColorGreen)
 		} else {
@@ -761,8 +777,13 @@ func (a *App) duplicateVariant() {
 	dst := filepath.Join(a.variantDir, name+"_copy.yaml")
 	suffix := 2
 	for {
-		if _, err := os.Stat(dst); os.IsNotExist(err) {
+		_, err := os.Stat(dst)
+		if os.IsNotExist(err) {
 			break
+		}
+		if err != nil {
+			a.viewerPanel.SetText(fmt.Sprintf("[red]Error checking file: %s[-]", err.Error()))
+			return
 		}
 		dst = filepath.Join(a.variantDir, fmt.Sprintf("%s_copy%d.yaml", name, suffix))
 		suffix++
@@ -828,7 +849,9 @@ func (a *App) executeDelete() {
 
 	// If the deleted variant was the active one, set value to "??"
 	if a.selectedBuilderNode != nil && a.selectedBuilderNode.Value == name {
-		_ = updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, "??")
+		if err := updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, "??"); err != nil {
+			a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
+		}
 
 		sourceFile := a.selectedBuilderNode.SourceFilePath
 		key := a.selectedBuilderNode.Key
@@ -912,7 +935,11 @@ func (a *App) executeRename(idx int, newName string) {
 
 	// If the renamed variant was the active one, update the config
 	if a.selectedBuilderNode != nil && a.selectedBuilderNode.Value == oldName {
-		_ = updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, newName)
+		if err := updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, newName); err != nil {
+			a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
+			a.closeRename()
+			return
+		}
 
 		sourceFile := a.selectedBuilderNode.SourceFilePath
 		key := a.selectedBuilderNode.Key
@@ -949,13 +976,17 @@ func (a *App) editVariantInEditor() {
 		editor = "vi"
 	}
 
+	var editorErr error
 	a.app.Suspend(func() {
 		cmd := exec.Command(editor, filePath)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		_ = cmd.Run()
+		editorErr = cmd.Run()
 	})
+	if editorErr != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Editor exited with error: %s[-]", editorErr.Error()))
+	}
 	a.refreshAll()
 	a.populateVariants(a.selectedBuilderNode)
 }
@@ -964,6 +995,7 @@ func main() {
 	a := newApp()
 	a.app.SetRoot(a.pages, true).EnableMouse(false)
 	if err := a.app.Run(); err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 }

@@ -46,6 +46,7 @@ func updateDefaultValue(filePath, rawKey, newValue string) error {
 	}
 
 	// Walk sequence items to find the matching rawKey
+	found := false
 	for _, item := range defaultsNode.Content {
 		if item.Kind != yaml.MappingNode {
 			continue
@@ -56,9 +57,16 @@ func updateDefaultValue(filePath, rawKey, newValue string) error {
 			if keyNode.Value == rawKey {
 				valNode.Value = newValue
 				valNode.Tag = "!!str"
+				found = true
 				break
 			}
 		}
+		if found {
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("key %q not found in defaults of %s", rawKey, filePath)
 	}
 
 	out, err := yaml.Marshal(&doc)
