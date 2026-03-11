@@ -33,6 +33,9 @@ type App struct {
 	flatItems    []*TreeNode
 	confDir      string
 
+	visibleBuilderItems []*TreeNode
+	visibleVariantFiles []string
+
 	selectedBuilderNode *TreeNode
 	variantFiles        []string
 	variantDir          string
@@ -47,6 +50,10 @@ type App struct {
 	confirmOpen     bool
 	renameOpen      bool
 	pendingDeleteIdx int
+
+	searchMode  bool
+	searchQuery string
+	searchPanel int
 }
 
 func newApp() *App {
@@ -104,9 +111,9 @@ func newApp() *App {
 	}
 
 	builderPanel.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		if index >= 0 && index < len(a.flatItems) {
+		if index >= 0 && index < len(a.visibleBuilderItems) {
 			a.refreshBuilderSelection(index)
-			node := a.flatItems[index]
+			node := a.visibleBuilderItems[index]
 			a.selectedBuilderNode = node
 			a.populateVariants(node)
 			if a.currentPanelIdx == 0 {
@@ -118,11 +125,11 @@ func newApp() *App {
 	variantsPanel.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		a.refreshVariantsSelection(index)
 		if a.currentPanelIdx == 1 {
-			if a.diffMode && index >= 0 && index < len(a.variantFiles) {
-				currentPath := filepath.Join(a.variantDir, a.variantFiles[index]+".yaml")
+			if a.diffMode && index >= 0 && index < len(a.visibleVariantFiles) {
+				currentPath := filepath.Join(a.variantDir, a.visibleVariantFiles[index]+".yaml")
 				a.updateViewerDiff(a.diffFromFile, currentPath)
-			} else if index >= 0 && index < len(a.variantFiles) {
-				variantPath := filepath.Join(a.variantDir, a.variantFiles[index]+".yaml")
+			} else if index >= 0 && index < len(a.visibleVariantFiles) {
+				variantPath := filepath.Join(a.variantDir, a.visibleVariantFiles[index]+".yaml")
 				a.updateViewer(&TreeNode{FilePath: variantPath})
 			}
 		}
@@ -149,6 +156,14 @@ func newApp() *App {
 		AddPage("main", rootFlex, true, true)
 
 	a.refreshAll()
+
+	// Trigger initial selection so variants and viewer populate on startup.
+	if len(a.flatItems) > 0 {
+		a.selectedBuilderNode = a.flatItems[0]
+		a.populateVariants(a.selectedBuilderNode)
+		a.updateViewer(a.selectedBuilderNode)
+	}
+
 	a.setupKeybindings()
 	a.updateBorderColors()
 	a.updateStatusBar()
@@ -178,6 +193,7 @@ func (a *App) refreshAll() {
 	} else {
 		a.variantsPanel.Clear()
 		a.variantFiles = nil
+		a.visibleVariantFiles = nil
 		a.variantDir = ""
 	}
 
@@ -190,6 +206,10 @@ func (a *App) refreshAll() {
 func (a *App) rebuildBuilderList() {
 	currentIdx := a.builderPanel.GetCurrentItem()
 	a.flatItems = flattenTree(a.rootNodes)
+	// Update visibleBuilderItems before modifying the panel so that
+	// SetChangedFunc callbacks (triggered by AddItem/SetCurrentItem)
+	// see the correct item list rather than stale data.
+	a.visibleBuilderItems = a.flatItems
 	a.builderPanel.Clear()
 	for i, node := range a.flatItems {
 		a.builderPanel.AddItem(renderItem(node, i == currentIdx), "", 0, nil)
@@ -205,7 +225,7 @@ func (a *App) rebuildBuilderList() {
 // refreshBuilderSelection re-renders all builder items to update the selection marker.
 func (a *App) refreshBuilderSelection(selectedIdx int) {
 	count := a.builderPanel.GetItemCount()
-	for i, node := range a.flatItems {
+	for i, node := range a.visibleBuilderItems {
 		if i >= count {
 			break
 		}
@@ -219,7 +239,7 @@ func (a *App) refreshVariantsSelection(selectedIdx int) {
 	if a.selectedBuilderNode != nil {
 		activeValue = a.selectedBuilderNode.Value
 	}
-	for i, name := range a.variantFiles {
+	for i, name := range a.visibleVariantFiles {
 		if i >= a.variantsPanel.GetItemCount() {
 			break
 		}
@@ -231,6 +251,15 @@ func (a *App) refreshVariantsSelection(selectedIdx int) {
 // populateVariants reads variant files from the node's package directory
 // and populates the variants panel.
 func (a *App) populateVariants(node *TreeNode) {
+	// Exit search if active on the variants panel — the variant list is about
+	// to be replaced, so filtered state would become stale.
+	if a.searchMode && a.searchPanel == 1 {
+		a.searchMode = false
+		a.searchQuery = ""
+		a.updateStatusBar()
+		a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] 0.0.1 ")
+	}
+
 	// Reset diff state — the variant list is about to change, so diffFromIdx
 	// and diffFromFile would become stale.
 	if a.diffMode {
@@ -243,6 +272,7 @@ func (a *App) populateVariants(node *TreeNode) {
 
 	a.variantsPanel.Clear()
 	a.variantFiles = nil
+	a.visibleVariantFiles = nil
 	a.variantDir = ""
 
 	if node == nil {
@@ -272,17 +302,18 @@ func (a *App) populateVariants(node *TreeNode) {
 	if activeIdx >= 0 {
 		a.variantsPanel.SetCurrentItem(activeIdx)
 	}
+	a.visibleVariantFiles = a.variantFiles
 }
 
 // selectVariant selects the highlighted variant, updates the YAML config file,
 // and refreshes the tree.
 func (a *App) selectVariant() {
 	idx := a.variantsPanel.GetCurrentItem()
-	if idx < 0 || idx >= len(a.variantFiles) || a.selectedBuilderNode == nil {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) || a.selectedBuilderNode == nil {
 		return
 	}
 
-	newValue := a.variantFiles[idx]
+	newValue := a.visibleVariantFiles[idx]
 	node := a.selectedBuilderNode
 
 	if err := updateDefaultValue(node.SourceFilePath, node.RawKey, newValue); err != nil {
@@ -320,17 +351,17 @@ func (a *App) refreshCurrentViewer() {
 	switch a.currentPanelIdx {
 	case 0:
 		idx := a.builderPanel.GetCurrentItem()
-		if idx >= 0 && idx < len(a.flatItems) {
-			a.updateViewer(a.flatItems[idx])
+		if idx >= 0 && idx < len(a.visibleBuilderItems) {
+			a.updateViewer(a.visibleBuilderItems[idx])
 		}
 	case 1:
 		variantIdx := a.variantsPanel.GetCurrentItem()
-		if variantIdx >= 0 && variantIdx < len(a.variantFiles) {
+		if variantIdx >= 0 && variantIdx < len(a.visibleVariantFiles) {
 			if a.diffMode {
-				currentPath := filepath.Join(a.variantDir, a.variantFiles[variantIdx]+".yaml")
+				currentPath := filepath.Join(a.variantDir, a.visibleVariantFiles[variantIdx]+".yaml")
 				a.updateViewerDiff(a.diffFromFile, currentPath)
 			} else {
-				variantPath := filepath.Join(a.variantDir, a.variantFiles[variantIdx]+".yaml")
+				variantPath := filepath.Join(a.variantDir, a.visibleVariantFiles[variantIdx]+".yaml")
 				a.updateViewer(&TreeNode{FilePath: variantPath})
 			}
 		}
@@ -339,12 +370,12 @@ func (a *App) refreshCurrentViewer() {
 
 func (a *App) enterDiffMode() {
 	idx := a.variantsPanel.GetCurrentItem()
-	if idx < 0 || idx >= len(a.variantFiles) {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
 	}
 	a.diffMode = true
 	a.diffFromIdx = idx
-	a.diffFromFile = filepath.Join(a.variantDir, a.variantFiles[idx]+".yaml")
+	a.diffFromFile = filepath.Join(a.variantDir, a.visibleVariantFiles[idx]+".yaml")
 	a.variantsPanel.SetTitle(" [2] Variants [yellow::b]diff[-:-:-] ")
 	a.refreshVariantsSelection(idx)
 	a.viewerPanel.SetText("[darkgray]Navigate to another variant to see diff[-]")
@@ -420,6 +451,36 @@ func (a *App) setupKeybindings() {
 			return event
 		}
 
+		// Search mode: capture all input for the search query
+		if a.searchMode {
+			switch event.Key() {
+			case tcell.KeyEsc:
+				a.exitSearchMode()
+				return nil
+			case tcell.KeyBackspace, tcell.KeyBackspace2:
+				if len(a.searchQuery) > 0 {
+					runes := []rune(a.searchQuery)
+					a.searchQuery = string(runes[:len(runes)-1])
+					a.applySearch()
+				}
+				return nil
+			case tcell.KeyRune:
+				a.searchQuery += string(event.Rune())
+				a.applySearch()
+				return nil
+			case tcell.KeyEnter:
+				a.exitSearchMode()
+				return nil
+			case tcell.KeyDown:
+				a.searchCursorDown()
+				return nil
+			case tcell.KeyUp:
+				a.searchCursorUp()
+				return nil
+			}
+			return nil
+		}
+
 		// MAIN KEYBINDINGS — only when no modal open
 		switch event.Key() {
 		case tcell.KeyRune:
@@ -488,6 +549,11 @@ func (a *App) setupKeybindings() {
 				a.resolvedMode = !a.resolvedMode
 				a.refreshCurrentViewer()
 				return nil
+			case '/':
+				if a.currentPanelIdx == 0 || a.currentPanelIdx == 1 {
+					a.enterSearchMode()
+					return nil
+				}
 			}
 		case tcell.KeyEnter:
 			if a.currentPanelIdx == 0 {
@@ -515,6 +581,9 @@ func (a *App) setupKeybindings() {
 func (a *App) focusPanel(idx int) {
 	if idx < 0 || idx >= len(a.panels) {
 		return
+	}
+	if a.searchMode {
+		a.exitSearchMode()
 	}
 	if a.diffMode && idx != 1 {
 		a.exitDiffMode()
@@ -580,12 +649,12 @@ func (a *App) scrollViewerUp() {
 func (a *App) updateStatusBar() {
 	switch a.currentPanelIdx {
 	case 0:
-		a.statusBarLeft.SetText(" Navigate: j/k | Expand: Enter | Panels: h/l | Scroll: J/K | Resolve: v | Help: ? | Quit: q")
+		a.statusBarLeft.SetText(" Navigate: j/k | Expand: Enter | Panels: h/l | Scroll: J/K | Resolve: v | Search: / | Help: ? | Quit: q")
 	case 1:
 		if a.diffMode {
-			a.statusBarLeft.SetText(" Navigate: j/k | Scroll: J/K | Resolve: v | Exit diff: Esc | Help: ? | Quit: q")
+			a.statusBarLeft.SetText(" Navigate: j/k | Scroll: J/K | Resolve: v | Search: / | Exit diff: Esc | Help: ? | Quit: q")
 		} else {
-			a.statusBarLeft.SetText(" Navigate: j/k | Select: Space | Dup: d | Rename: r | Del: D | Edit: e | Resolve: v | Diff: w | Help: ?")
+			a.statusBarLeft.SetText(" Navigate: j/k | Select: Space | Dup: d | Rename: r | Del: D | Edit: e | Resolve: v | Diff: w | Search: / | Help: ?")
 		}
 	default:
 		a.statusBarLeft.SetText(fmt.Sprintf(" Panel %d", a.currentPanelIdx))
@@ -611,6 +680,7 @@ var panelHelpTexts = map[int]string{
   1             Jump to this panel
   h / l         Switch panels
   Tab / S-Tab   Cycle panels
+  /             Search/filter items
 
 [green]Viewer:[-]
   J / K         Scroll viewer
@@ -630,6 +700,7 @@ var panelHelpTexts = map[int]string{
   2             Jump to this panel
   h / l         Switch panels
   Tab / S-Tab   Cycle panels
+  /             Search/filter items
 
 [green]Actions:[-]
   Space         Select this variant
@@ -680,11 +751,11 @@ func (a *App) closeHelp() {
 // duplicateVariant copies the selected variant file with a _copy suffix.
 func (a *App) duplicateVariant() {
 	idx := a.variantsPanel.GetCurrentItem()
-	if idx < 0 || idx >= len(a.variantFiles) {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
 	}
 
-	name := a.variantFiles[idx]
+	name := a.visibleVariantFiles[idx]
 	src := filepath.Join(a.variantDir, name+".yaml")
 
 	dst := filepath.Join(a.variantDir, name+"_copy.yaml")
@@ -713,14 +784,14 @@ func (a *App) duplicateVariant() {
 // showDeleteConfirm shows a confirmation modal for deleting the selected variant.
 func (a *App) showDeleteConfirm() {
 	idx := a.variantsPanel.GetCurrentItem()
-	if idx < 0 || idx >= len(a.variantFiles) {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
 	}
 
 	a.pendingDeleteIdx = idx
 	a.confirmOpen = true
 
-	name := a.variantFiles[idx]
+	name := a.visibleVariantFiles[idx]
 	confirmView := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter).
@@ -741,12 +812,12 @@ func (a *App) showDeleteConfirm() {
 // executeDelete performs the actual file deletion after confirmation.
 func (a *App) executeDelete() {
 	idx := a.pendingDeleteIdx
-	if idx < 0 || idx >= len(a.variantFiles) {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		a.closeConfirm()
 		return
 	}
 
-	name := a.variantFiles[idx]
+	name := a.visibleVariantFiles[idx]
 	filePath := filepath.Join(a.variantDir, name+".yaml")
 
 	if err := os.Remove(filePath); err != nil {
@@ -784,12 +855,12 @@ func (a *App) closeConfirm() {
 // showRenameModal shows an input modal for renaming the selected variant.
 func (a *App) showRenameModal() {
 	idx := a.variantsPanel.GetCurrentItem()
-	if idx < 0 || idx >= len(a.variantFiles) {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
 	}
 
 	a.renameOpen = true
-	name := a.variantFiles[idx]
+	name := a.visibleVariantFiles[idx]
 
 	inputField := tview.NewInputField().
 		SetLabel("New name: ").
@@ -819,12 +890,12 @@ func (a *App) showRenameModal() {
 
 // executeRename renames the variant file and updates the config if it was the active variant.
 func (a *App) executeRename(idx int, newName string) {
-	if idx < 0 || idx >= len(a.variantFiles) || newName == "" {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) || newName == "" {
 		a.closeRename()
 		return
 	}
 
-	oldName := a.variantFiles[idx]
+	oldName := a.visibleVariantFiles[idx]
 	if oldName == newName {
 		a.closeRename()
 		return
@@ -868,11 +939,11 @@ func (a *App) closeRename() {
 // editVariantInEditor opens the selected variant file in $EDITOR.
 func (a *App) editVariantInEditor() {
 	idx := a.variantsPanel.GetCurrentItem()
-	if idx < 0 || idx >= len(a.variantFiles) {
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
 	}
 
-	filePath := filepath.Join(a.variantDir, a.variantFiles[idx]+".yaml")
+	filePath := filepath.Join(a.variantDir, a.visibleVariantFiles[idx]+".yaml")
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
 		editor = "vi"
