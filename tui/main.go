@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -20,22 +22,26 @@ type App struct {
 	panels          []tview.Primitive // Only [builderPanel, variantsPanel]
 	currentPanelIdx int
 
-	builderPanel  *tview.List
-	variantsPanel *tview.List
-	viewerPanel   *tview.TextView
-	statusBar     *tview.TextView
+	builderPanel   *tview.List
+	variantsPanel  *tview.List
+	viewerPanel    *tview.TextView
+	statusBarLeft  *tview.TextView
+	statusBarRight *tview.TextView
+
+	rootNodes    []*TreeNode
+	flatItems    []*TreeNode
+	variantNames []string
+	confDir      string
 
 	helpOpen bool
 }
 
 func newApp() *App {
-	selectionColor := tcell.NewRGBColor(106, 159, 181) // #6a9fb5
-
 	builderPanel := tview.NewList().
 		ShowSecondaryText(false).
 		SetHighlightFullLine(true).
-		SetSelectedBackgroundColor(selectionColor).
-		SetSelectedTextColor(tcell.ColorWhite)
+		SetSelectedBackgroundColor(tcell.ColorDefault).
+		SetSelectedTextColor(tcell.ColorDefault)
 	builderPanel.SetBorder(true).
 		SetTitle(" [1] Builder ").
 		SetTitleAlign(tview.AlignLeft).
@@ -44,8 +50,8 @@ func newApp() *App {
 	variantsPanel := tview.NewList().
 		ShowSecondaryText(false).
 		SetHighlightFullLine(true).
-		SetSelectedBackgroundColor(selectionColor).
-		SetSelectedTextColor(tcell.ColorWhite)
+		SetSelectedBackgroundColor(tcell.ColorDefault).
+		SetSelectedTextColor(tcell.ColorDefault)
 	variantsPanel.SetBorder(true).
 		SetTitle(" [2] Variants ").
 		SetTitleAlign(tview.AlignLeft).
@@ -59,18 +65,41 @@ func newApp() *App {
 		SetTitleAlign(tview.AlignLeft).
 		SetBorderColor(tcell.ColorDefault)
 
-	statusBar := tview.NewTextView().
+	statusBarLeft := tview.NewTextView().
 		SetDynamicColors(true)
-	statusBar.SetBorder(false)
+	statusBarLeft.SetBorder(false)
+
+	statusBarRight := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignRight)
+	statusBarRight.SetBorder(false)
+	statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] 0.0.1 ")
+
+	exe, _ := os.Executable()
+	exeDir := filepath.Dir(exe)
+	confDir, _ := filepath.Abs(filepath.Join(exeDir, "..", "conf"))
 
 	a := &App{
 		app:           tview.NewApplication(),
-		builderPanel:  builderPanel,
-		variantsPanel: variantsPanel,
-		viewerPanel:   viewerPanel,
-		statusBar:     statusBar,
-		panels:        []tview.Primitive{builderPanel, variantsPanel},
+		builderPanel:   builderPanel,
+		variantsPanel:  variantsPanel,
+		viewerPanel:    viewerPanel,
+		statusBarLeft:  statusBarLeft,
+		statusBarRight: statusBarRight,
+		panels:         []tview.Primitive{builderPanel, variantsPanel},
+		confDir:        confDir,
 	}
+
+	builderPanel.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		if index >= 0 && index < len(a.flatItems) {
+			a.refreshBuilderSelection(index)
+			a.updateViewer(a.flatItems[index])
+		}
+	})
+
+	variantsPanel.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		a.refreshVariantsSelection(index)
+	})
 
 	// Build layout
 	leftFlex := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -81,9 +110,13 @@ func newApp() *App {
 		AddItem(leftFlex, 0, 2, true).
 		AddItem(a.viewerPanel, 0, 3, false)
 
+	statusFlex := tview.NewFlex().SetDirection(tview.FlexColumn).
+		AddItem(a.statusBarLeft, 0, 3, false).
+		AddItem(a.statusBarRight, 0, 1, false)
+
 	rootFlex := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(mainFlex, 0, 1, true).
-		AddItem(a.statusBar, 1, 0, false)
+		AddItem(statusFlex, 1, 0, false)
 
 	a.pages = tview.NewPages().
 		AddPage("main", rootFlex, true, true)
@@ -97,32 +130,82 @@ func newApp() *App {
 }
 
 func (a *App) refreshAll() {
-	// Builder placeholder items
-	a.builderPanel.Clear()
-	for _, item := range []string{
-		"supervised_pre_training_base",
-		"evidence_evaluation",
-		"feature_matching",
-		"monte_carlo_search",
-		"multi_object_detection",
-	} {
-		a.builderPanel.AddItem(item, "", 0, nil)
+	// Load tree from hardcoded experiment
+	expPath := filepath.Join(a.confDir, "experiment", "base_config_10distinctobj_dist_agent.yaml")
+	roots, err := buildTree(expPath, a.confDir)
+	if err != nil {
+		a.builderPanel.Clear()
+		a.builderPanel.AddItem(fmt.Sprintf("[red]Error: %s[-]", err.Error()), "", 0, nil)
+	} else {
+		a.rootNodes = roots
+		a.rebuildBuilderList()
 	}
 
 	// Variants placeholder items
+	a.variantNames = []string{"default", "debug", "5lms", "fast", "high_accuracy"}
 	a.variantsPanel.Clear()
-	for _, item := range []string{
-		"default",
-		"debug",
-		"5lms",
-		"fast",
-		"high_accuracy",
-	} {
-		a.variantsPanel.AddItem(item, "", 0, nil)
+	for i, item := range a.variantNames {
+		a.variantsPanel.AddItem(renderVariantItem(item, i == 0), "", 0, nil)
 	}
 
 	// Viewer placeholder
 	a.viewerPanel.SetText("[darkgray]Select a config to preview[-]")
+}
+
+func (a *App) rebuildBuilderList() {
+	currentIdx := a.builderPanel.GetCurrentItem()
+	a.flatItems = flattenTree(a.rootNodes)
+	a.builderPanel.Clear()
+	for i, node := range a.flatItems {
+		a.builderPanel.AddItem(renderItem(node, i == currentIdx), "", 0, nil)
+	}
+	if currentIdx >= len(a.flatItems) {
+		currentIdx = len(a.flatItems) - 1
+	}
+	if currentIdx >= 0 {
+		a.builderPanel.SetCurrentItem(currentIdx)
+	}
+}
+
+// refreshBuilderSelection re-renders all builder items to update the selection marker.
+func (a *App) refreshBuilderSelection(selectedIdx int) {
+	count := a.builderPanel.GetItemCount()
+	for i, node := range a.flatItems {
+		if i >= count {
+			break
+		}
+		a.builderPanel.SetItemText(i, renderItem(node, i == selectedIdx), "")
+	}
+}
+
+// refreshVariantsSelection re-renders all variant items to update the selection marker.
+func (a *App) refreshVariantsSelection(selectedIdx int) {
+	for i, name := range a.variantNames {
+		if i >= a.variantsPanel.GetItemCount() {
+			break
+		}
+		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx), "")
+	}
+}
+
+func (a *App) toggleExpand() {
+	idx := a.builderPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.flatItems) {
+		return
+	}
+	node := a.flatItems[idx]
+	if node.IsLeaf {
+		return
+	}
+	node.Expanded = !node.Expanded
+	a.rebuildBuilderList()
+	// Find the toggled node's new index and restore cursor
+	for i, n := range a.flatItems {
+		if n == node {
+			a.builderPanel.SetCurrentItem(i)
+			break
+		}
+	}
 }
 
 func (a *App) setupKeybindings() {
@@ -171,6 +254,11 @@ func (a *App) setupKeybindings() {
 				a.showHelp()
 				return nil
 			}
+		case tcell.KeyEnter:
+			if a.currentPanelIdx == 0 {
+				a.toggleExpand()
+				return nil
+			}
 		case tcell.KeyTab:
 			a.nextPanel()
 			return nil
@@ -204,16 +292,12 @@ func (a *App) prevPanel() {
 }
 
 func (a *App) updateBorderColors() {
-	selectionColor := tcell.NewRGBColor(106, 159, 181) // #6a9fb5
-
 	for i, panel := range a.panels {
 		list := panel.(*tview.List)
 		if i == a.currentPanelIdx {
 			list.SetBorderColor(tcell.ColorGreen)
-			list.SetSelectedBackgroundColor(selectionColor)
 		} else {
 			list.SetBorderColor(tcell.ColorDefault)
-			list.SetSelectedBackgroundColor(tcell.ColorDefault)
 		}
 	}
 }
@@ -249,15 +333,15 @@ func (a *App) scrollViewerUp() {
 }
 
 var statusBarTexts = map[int]string{
-	0: " [::b]Builder[-:-:-]  [j/k] navigate  [h/l] panels  [J/K] scroll viewer  [?] help  [q] quit",
-	1: " [::b]Variants[-:-:-]  [j/k] navigate  [h/l] panels  [J/K] scroll viewer  [?] help  [q] quit",
+	0: " Navigate: j/k | Expand/Collapse: Enter | Panels: h/l | Scroll Viewer: J/K | Help: ? | Quit: q",
+	1: " Navigate: j/k | Panels: h/l | Scroll Viewer: J/K | Help: ? | Quit: q",
 }
 
 func (a *App) updateStatusBar() {
 	if text, ok := statusBarTexts[a.currentPanelIdx]; ok {
-		a.statusBar.SetText(text)
+		a.statusBarLeft.SetText(text)
 	} else {
-		a.statusBar.SetText(fmt.Sprintf(" Panel %d", a.currentPanelIdx))
+		a.statusBarLeft.SetText(fmt.Sprintf(" Panel %d", a.currentPanelIdx))
 	}
 }
 
@@ -276,6 +360,7 @@ var panelHelpTexts = map[int]string{
 
 [green]Navigation:[-]
   j / k         Move cursor up/down
+  Enter         Expand/collapse node
   1             Jump to this panel
   h / l         Switch panels
   Tab / S-Tab   Cycle panels
