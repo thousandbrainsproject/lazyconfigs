@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/gdamore/tcell/v2"
@@ -30,10 +31,16 @@ type App struct {
 
 	rootNodes    []*TreeNode
 	flatItems    []*TreeNode
-	variantNames []string
 	confDir      string
 
-	helpOpen bool
+	selectedBuilderNode *TreeNode
+	variantFiles        []string
+	variantDir          string
+
+	helpOpen        bool
+	confirmOpen     bool
+	renameOpen      bool
+	pendingDeleteIdx int
 }
 
 func newApp() *App {
@@ -93,12 +100,21 @@ func newApp() *App {
 	builderPanel.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		if index >= 0 && index < len(a.flatItems) {
 			a.refreshBuilderSelection(index)
-			a.updateViewer(a.flatItems[index])
+			node := a.flatItems[index]
+			a.selectedBuilderNode = node
+			a.populateVariants(node)
+			if a.currentPanelIdx == 0 {
+				a.updateViewer(node)
+			}
 		}
 	})
 
 	variantsPanel.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		a.refreshVariantsSelection(index)
+		if a.currentPanelIdx == 1 && index >= 0 && index < len(a.variantFiles) {
+			variantPath := filepath.Join(a.variantDir, a.variantFiles[index]+".yaml")
+			a.updateViewer(&TreeNode{FilePath: variantPath})
+		}
 	})
 
 	// Build layout
@@ -130,6 +146,9 @@ func newApp() *App {
 }
 
 func (a *App) refreshAll() {
+	// Save expanded state before rebuilding
+	expanded := collectExpanded(a.rootNodes)
+
 	// Load tree from hardcoded experiment
 	expPath := filepath.Join(a.confDir, "experiment", "base_config_10distinctobj_dist_agent.yaml")
 	roots, err := buildTree(expPath, a.confDir)
@@ -137,15 +156,18 @@ func (a *App) refreshAll() {
 		a.builderPanel.Clear()
 		a.builderPanel.AddItem(fmt.Sprintf("[red]Error: %s[-]", err.Error()), "", 0, nil)
 	} else {
+		restoreExpanded(roots, expanded)
 		a.rootNodes = roots
 		a.rebuildBuilderList()
 	}
 
-	// Variants placeholder items
-	a.variantNames = []string{"default", "debug", "5lms", "fast", "high_accuracy"}
-	a.variantsPanel.Clear()
-	for i, item := range a.variantNames {
-		a.variantsPanel.AddItem(renderVariantItem(item, i == 0), "", 0, nil)
+	// Populate variants from selected builder node (or clear)
+	if a.selectedBuilderNode != nil {
+		a.populateVariants(a.selectedBuilderNode)
+	} else {
+		a.variantsPanel.Clear()
+		a.variantFiles = nil
+		a.variantDir = ""
 	}
 
 	// Viewer placeholder
@@ -180,12 +202,93 @@ func (a *App) refreshBuilderSelection(selectedIdx int) {
 
 // refreshVariantsSelection re-renders all variant items to update the selection marker.
 func (a *App) refreshVariantsSelection(selectedIdx int) {
-	for i, name := range a.variantNames {
+	activeValue := ""
+	if a.selectedBuilderNode != nil {
+		activeValue = a.selectedBuilderNode.Value
+	}
+	for i, name := range a.variantFiles {
 		if i >= a.variantsPanel.GetItemCount() {
 			break
 		}
-		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx), "")
+		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx, name == activeValue), "")
 	}
+}
+
+// populateVariants reads variant files from the node's package directory
+// and populates the variants panel.
+func (a *App) populateVariants(node *TreeNode) {
+	a.variantsPanel.Clear()
+	a.variantFiles = nil
+	a.variantDir = ""
+
+	if node == nil {
+		return
+	}
+
+	dir := node.packageDir(a.confDir)
+	variants, err := listVariants(dir)
+	if err != nil {
+		a.variantsPanel.AddItem(fmt.Sprintf("[red]Error: %s[-]", err.Error()), "", 0, nil)
+		return
+	}
+
+	a.variantDir = dir
+	a.variantFiles = variants
+
+	activeIdx := -1
+	for i, name := range variants {
+		isActive := name == node.Value
+		a.variantsPanel.AddItem(renderVariantItem(name, i == 0, isActive), "", 0, nil)
+		if isActive {
+			activeIdx = i
+		}
+	}
+
+	// Auto-scroll to active variant
+	if activeIdx >= 0 {
+		a.variantsPanel.SetCurrentItem(activeIdx)
+	}
+}
+
+// selectVariant selects the highlighted variant, updates the YAML config file,
+// and refreshes the tree.
+func (a *App) selectVariant() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.variantFiles) || a.selectedBuilderNode == nil {
+		return
+	}
+
+	newValue := a.variantFiles[idx]
+	node := a.selectedBuilderNode
+
+	if err := updateDefaultValue(node.SourceFilePath, node.RawKey, newValue); err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
+		return
+	}
+
+	// Save identifiers for cursor restoration
+	sourceFile := node.SourceFilePath
+	key := node.Key
+
+	a.refreshAll()
+
+	// Restore builder cursor to the same node
+	restoredIdx := a.findBuilderNodeIndex(sourceFile, key)
+	if restoredIdx >= 0 {
+		a.builderPanel.SetCurrentItem(restoredIdx)
+		a.selectedBuilderNode = a.flatItems[restoredIdx]
+		a.populateVariants(a.selectedBuilderNode)
+	}
+}
+
+// findBuilderNodeIndex finds the index of a node in flatItems by SourceFilePath and Key.
+func (a *App) findBuilderNodeIndex(sourceFile, key string) int {
+	for i, node := range a.flatItems {
+		if node.SourceFilePath == sourceFile && node.Key == key {
+			return i
+		}
+	}
+	return -1
 }
 
 func (a *App) toggleExpand() {
@@ -211,6 +314,34 @@ func (a *App) toggleExpand() {
 func (a *App) setupKeybindings() {
 	a.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		// MODAL PRIORITY CHAIN — must be first
+		// Rename modal: passthrough so InputField receives characters
+		if a.renameOpen {
+			if event.Key() == tcell.KeyEsc {
+				a.closeRename()
+				return nil
+			}
+			return event
+		}
+
+		// Confirm modal: only handle y/n/Esc/q
+		if a.confirmOpen {
+			switch event.Key() {
+			case tcell.KeyRune:
+				switch event.Rune() {
+				case 'y', 'Y':
+					a.executeDelete()
+					return nil
+				case 'n', 'N', 'q':
+					a.closeConfirm()
+					return nil
+				}
+			case tcell.KeyEsc:
+				a.closeConfirm()
+				return nil
+			}
+			return nil
+		}
+
 		if a.helpOpen {
 			if event.Key() == tcell.KeyEsc {
 				a.closeHelp()
@@ -253,6 +384,31 @@ func (a *App) setupKeybindings() {
 			case '?':
 				a.showHelp()
 				return nil
+			case ' ':
+				if a.currentPanelIdx == 1 {
+					a.selectVariant()
+					return nil
+				}
+			case 'd':
+				if a.currentPanelIdx == 1 {
+					a.duplicateVariant()
+					return nil
+				}
+			case 'r':
+				if a.currentPanelIdx == 1 {
+					a.showRenameModal()
+					return nil
+				}
+			case 'D':
+				if a.currentPanelIdx == 1 {
+					a.showDeleteConfirm()
+					return nil
+				}
+			case 'e':
+				if a.currentPanelIdx == 1 {
+					a.editVariantInEditor()
+					return nil
+				}
 			}
 		case tcell.KeyEnter:
 			if a.currentPanelIdx == 0 {
@@ -281,6 +437,23 @@ func (a *App) focusPanel(idx int) {
 	a.app.SetFocus(a.panels[a.currentPanelIdx])
 	a.updateBorderColors()
 	a.updateStatusBar()
+
+	// Switch viewer content based on focused panel
+	switch idx {
+	case 0:
+		// Builder panel: show selected builder node
+		builderIdx := a.builderPanel.GetCurrentItem()
+		if builderIdx >= 0 && builderIdx < len(a.flatItems) {
+			a.updateViewer(a.flatItems[builderIdx])
+		}
+	case 1:
+		// Variants panel: show highlighted variant file
+		variantIdx := a.variantsPanel.GetCurrentItem()
+		if variantIdx >= 0 && variantIdx < len(a.variantFiles) {
+			variantPath := filepath.Join(a.variantDir, a.variantFiles[variantIdx]+".yaml")
+			a.updateViewer(&TreeNode{FilePath: variantPath})
+		}
+	}
 }
 
 func (a *App) nextPanel() {
@@ -334,7 +507,7 @@ func (a *App) scrollViewerUp() {
 
 var statusBarTexts = map[int]string{
 	0: " Navigate: j/k | Expand/Collapse: Enter | Panels: h/l | Scroll Viewer: J/K | Help: ? | Quit: q",
-	1: " Navigate: j/k | Panels: h/l | Scroll Viewer: J/K | Help: ? | Quit: q",
+	1: " Navigate: j/k | Select: Space | Dup: d | Rename: r | Delete: D | Edit: e | Help: ? | Quit: q",
 }
 
 func (a *App) updateStatusBar() {
@@ -383,6 +556,13 @@ var panelHelpTexts = map[int]string{
   h / l         Switch panels
   Tab / S-Tab   Cycle panels
 
+[green]Actions:[-]
+  Space         Select this variant
+  d             Duplicate variant
+  r             Rename variant
+  D             Delete variant (confirm)
+  e             Edit in $EDITOR
+
 [green]Viewer:[-]
   J / K         Scroll viewer
 
@@ -418,6 +598,207 @@ func (a *App) closeHelp() {
 	a.pages.RemovePage("help")
 	a.app.SetFocus(a.panels[a.currentPanelIdx])
 	a.updateBorderColors()
+}
+
+// duplicateVariant copies the selected variant file with a _copy suffix.
+func (a *App) duplicateVariant() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.variantFiles) {
+		return
+	}
+
+	name := a.variantFiles[idx]
+	src := filepath.Join(a.variantDir, name+".yaml")
+
+	dst := filepath.Join(a.variantDir, name+"_copy.yaml")
+	suffix := 2
+	for {
+		if _, err := os.Stat(dst); os.IsNotExist(err) {
+			break
+		}
+		dst = filepath.Join(a.variantDir, fmt.Sprintf("%s_copy%d.yaml", name, suffix))
+		suffix++
+	}
+
+	data, err := os.ReadFile(src)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error reading file: %s[-]", err.Error()))
+		return
+	}
+	if err := os.WriteFile(dst, data, 0644); err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error writing file: %s[-]", err.Error()))
+		return
+	}
+
+	a.populateVariants(a.selectedBuilderNode)
+}
+
+// showDeleteConfirm shows a confirmation modal for deleting the selected variant.
+func (a *App) showDeleteConfirm() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.variantFiles) {
+		return
+	}
+
+	a.pendingDeleteIdx = idx
+	a.confirmOpen = true
+
+	name := a.variantFiles[idx]
+	confirmView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(fmt.Sprintf("\nDelete [yellow]%s.yaml[-]? [green](y/n)[-]", name))
+	confirmView.SetBorder(true).
+		SetTitle(" Confirm Delete ").
+		SetBorderColor(tcell.ColorRed)
+
+	a.pages.AddPage("confirm", modal(confirmView, 45, 5), true, true)
+	a.app.SetFocus(confirmView)
+}
+
+// executeDelete performs the actual file deletion after confirmation.
+func (a *App) executeDelete() {
+	idx := a.pendingDeleteIdx
+	if idx < 0 || idx >= len(a.variantFiles) {
+		a.closeConfirm()
+		return
+	}
+
+	name := a.variantFiles[idx]
+	filePath := filepath.Join(a.variantDir, name+".yaml")
+
+	if err := os.Remove(filePath); err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error deleting file: %s[-]", err.Error()))
+		a.closeConfirm()
+		return
+	}
+
+	// If the deleted variant was the active one, set value to "??"
+	if a.selectedBuilderNode != nil && a.selectedBuilderNode.Value == name {
+		_ = updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, "??")
+
+		sourceFile := a.selectedBuilderNode.SourceFilePath
+		key := a.selectedBuilderNode.Key
+		a.refreshAll()
+		restoredIdx := a.findBuilderNodeIndex(sourceFile, key)
+		if restoredIdx >= 0 {
+			a.builderPanel.SetCurrentItem(restoredIdx)
+			a.selectedBuilderNode = a.flatItems[restoredIdx]
+		}
+	}
+
+	a.closeConfirm()
+	a.populateVariants(a.selectedBuilderNode)
+}
+
+// closeConfirm closes the delete confirmation modal.
+func (a *App) closeConfirm() {
+	a.confirmOpen = false
+	a.pages.RemovePage("confirm")
+	a.app.SetFocus(a.panels[a.currentPanelIdx])
+	a.updateBorderColors()
+}
+
+// showRenameModal shows an input modal for renaming the selected variant.
+func (a *App) showRenameModal() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.variantFiles) {
+		return
+	}
+
+	a.renameOpen = true
+	name := a.variantFiles[idx]
+
+	inputField := tview.NewInputField().
+		SetLabel("New name: ").
+		SetText(name).
+		SetFieldWidth(30)
+	inputField.SetDoneFunc(func(key tcell.Key) {
+		if key == tcell.KeyEnter {
+			a.executeRename(idx, inputField.GetText())
+		} else {
+			a.closeRename()
+		}
+	})
+
+	inputField.SetBorder(true).
+		SetTitle(" Rename Variant ").
+		SetBorderColor(tcell.ColorGreen)
+
+	a.pages.AddPage("rename", modal(inputField, 50, 3), true, true)
+	a.app.SetFocus(inputField)
+}
+
+// executeRename renames the variant file and updates the config if it was the active variant.
+func (a *App) executeRename(idx int, newName string) {
+	if idx < 0 || idx >= len(a.variantFiles) || newName == "" {
+		a.closeRename()
+		return
+	}
+
+	oldName := a.variantFiles[idx]
+	if oldName == newName {
+		a.closeRename()
+		return
+	}
+
+	oldPath := filepath.Join(a.variantDir, oldName+".yaml")
+	newPath := filepath.Join(a.variantDir, newName+".yaml")
+
+	if err := os.Rename(oldPath, newPath); err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error renaming file: %s[-]", err.Error()))
+		a.closeRename()
+		return
+	}
+
+	// If the renamed variant was the active one, update the config
+	if a.selectedBuilderNode != nil && a.selectedBuilderNode.Value == oldName {
+		_ = updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, newName)
+
+		sourceFile := a.selectedBuilderNode.SourceFilePath
+		key := a.selectedBuilderNode.Key
+		a.refreshAll()
+		restoredIdx := a.findBuilderNodeIndex(sourceFile, key)
+		if restoredIdx >= 0 {
+			a.builderPanel.SetCurrentItem(restoredIdx)
+			a.selectedBuilderNode = a.flatItems[restoredIdx]
+		}
+	}
+
+	a.closeRename()
+	a.populateVariants(a.selectedBuilderNode)
+}
+
+// closeRename closes the rename input modal.
+func (a *App) closeRename() {
+	a.renameOpen = false
+	a.pages.RemovePage("rename")
+	a.app.SetFocus(a.panels[a.currentPanelIdx])
+	a.updateBorderColors()
+}
+
+// editVariantInEditor opens the selected variant file in $EDITOR.
+func (a *App) editVariantInEditor() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.variantFiles) {
+		return
+	}
+
+	filePath := filepath.Join(a.variantDir, a.variantFiles[idx]+".yaml")
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+
+	a.app.Suspend(func() {
+		cmd := exec.Command(editor, filePath)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run()
+	})
+	a.refreshAll()
+	a.populateVariants(a.selectedBuilderNode)
 }
 
 func main() {

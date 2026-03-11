@@ -5,6 +5,41 @@ import (
 	"strings"
 )
 
+// collectExpanded returns a set of node identity keys (SourceFilePath + ":" + Key)
+// for all expanded nodes in the tree.
+func collectExpanded(roots []*TreeNode) map[string]bool {
+	expanded := make(map[string]bool)
+	var walk func([]*TreeNode)
+	walk = func(nodes []*TreeNode) {
+		for _, n := range nodes {
+			if n.Expanded {
+				expanded[n.SourceFilePath+":"+n.Key] = true
+			}
+			if len(n.Children) > 0 {
+				walk(n.Children)
+			}
+		}
+	}
+	walk(roots)
+	return expanded
+}
+
+// restoreExpanded applies previously collected expanded state to a new tree.
+func restoreExpanded(roots []*TreeNode, expanded map[string]bool) {
+	var walk func([]*TreeNode)
+	walk = func(nodes []*TreeNode) {
+		for _, n := range nodes {
+			if expanded[n.SourceFilePath+":"+n.Key] {
+				n.Expanded = true
+			}
+			if len(n.Children) > 0 {
+				walk(n.Children)
+			}
+		}
+	}
+	walk(roots)
+}
+
 // flattenTree performs a depth-first walk that only descends into expanded nodes,
 // producing the visible list of items for the builder panel.
 func flattenTree(roots []*TreeNode) []*TreeNode {
@@ -45,7 +80,9 @@ func renderItem(node *TreeNode, selected bool) string {
 	} else {
 		label = node.Key
 	}
-	if node.Value != "" {
+	if node.Value == "??" || node.Error != "" {
+		label = fmt.Sprintf("%s: [red]%s[-]", label, node.Value)
+	} else if node.Value != "" {
 		label = fmt.Sprintf("%s: [green]%s[-]", label, node.Value)
 	}
 
@@ -56,9 +93,16 @@ func renderItem(node *TreeNode, selected bool) string {
 }
 
 // renderVariantItem produces a display string for a variant list item.
-func renderVariantItem(name string, selected bool) string {
-	if selected {
-		return fmt.Sprintf("[::b]%s[-:-:-]", name)
+// cursorSelected indicates the cursor is on this item; isActive indicates this is the currently selected variant.
+func renderVariantItem(name string, cursorSelected bool, isActive bool) string {
+	switch {
+	case isActive && cursorSelected:
+		return fmt.Sprintf("[green::b]* %s[-:-:-]", name)
+	case isActive:
+		return fmt.Sprintf("[green]* %s[-]", name)
+	case cursorSelected:
+		return fmt.Sprintf("[::b]  %s[-:-:-]", name)
+	default:
+		return fmt.Sprintf("[::d]  %s[-:-:-]", name)
 	}
-	return fmt.Sprintf("[::d]%s[-:-:-]", name)
 }

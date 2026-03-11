@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -18,16 +19,48 @@ type DefaultEntry struct {
 
 // TreeNode represents a node in the hierarchical config tree.
 type TreeNode struct {
-	Key      string
-	Value    string
-	FilePath string // absolute path to the resolved .yaml file
-	Absolute bool
-	Depth    int
-	Expanded bool
-	Children []*TreeNode
-	Parent   *TreeNode
-	IsLeaf   bool
-	Error    string // non-empty if file couldn't be loaded
+	Key            string
+	Value          string
+	FilePath       string // absolute path to the resolved .yaml file
+	Absolute       bool
+	Depth          int
+	Expanded       bool
+	Children       []*TreeNode
+	Parent         *TreeNode
+	IsLeaf         bool
+	Error          string // non-empty if file couldn't be loaded
+	SourceFilePath string // the file whose defaults: list contains this entry
+	RawKey         string // original key as in YAML (e.g., "/monty", "config")
+}
+
+// packageDir returns the directory containing variant files for this node.
+func (node *TreeNode) packageDir(confDir string) string {
+	if node.Absolute {
+		return filepath.Join(confDir, node.Key)
+	}
+	return filepath.Join(filepath.Dir(node.SourceFilePath), node.Key)
+}
+
+// listVariants reads directory and returns sorted .yaml filenames without extension,
+// skipping subdirectories.
+func listVariants(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".yaml") {
+			names = append(names, strings.TrimSuffix(name, ".yaml"))
+		}
+	}
+	sort.Strings(names)
+	return names, nil
 }
 
 // parseDefaults reads a YAML file and extracts its defaults: list.
@@ -144,12 +177,14 @@ func buildTreeRecursive(filePath, confDir string, depth int, parent *TreeNode, v
 		}
 
 		node := &TreeNode{
-			Key:      entry.Key,
-			Value:    entry.Value,
-			FilePath: childAbs,
-			Absolute: entry.Absolute,
-			Depth:    depth,
-			Parent:   parent,
+			Key:            entry.Key,
+			Value:          entry.Value,
+			FilePath:       childAbs,
+			Absolute:       entry.Absolute,
+			Depth:          depth,
+			Parent:         parent,
+			SourceFilePath: absPath,
+			RawKey:         entry.RawKey,
 		}
 
 		// Check if file exists
