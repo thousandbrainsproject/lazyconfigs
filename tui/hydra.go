@@ -227,3 +227,53 @@ func buildTreeRecursive(filePath, confDir string, depth int, parent *TreeNode, v
 
 	return nodes, nil
 }
+
+// findVariantReferences scans experiment files and returns names of experiments
+// that reference the given variant at any level of the resolved config hierarchy.
+func findVariantReferences(confDir, variantDir, variantName string) ([]string, error) {
+	targetFile := filepath.Join(variantDir, variantName+".yaml")
+	targetAbs, err := filepath.Abs(targetFile)
+	if err != nil {
+		return nil, err
+	}
+
+	expDir := filepath.Join(confDir, "experiment")
+	var refs []string
+
+	err = filepath.WalkDir(expDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
+			return nil
+		}
+		tree, err := buildTree(path, confDir)
+		if err != nil {
+			return nil // skip unparseable files
+		}
+		if treeContainsFile(tree, targetAbs) {
+			rel, err := filepath.Rel(expDir, path)
+			if err != nil {
+				rel = filepath.Base(path)
+			}
+			refs = append(refs, strings.TrimSuffix(rel, ".yaml"))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Strings(refs)
+	return refs, nil
+}
+
+// treeContainsFile recursively checks if any node in the tree resolves to the target file path.
+func treeContainsFile(nodes []*TreeNode, targetPath string) bool {
+	for _, node := range nodes {
+		if node.FilePath == targetPath {
+			return true
+		}
+		if treeContainsFile(node.Children, targetPath) {
+			return true
+		}
+	}
+	return false
+}

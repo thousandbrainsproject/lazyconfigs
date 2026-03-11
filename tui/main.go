@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -41,6 +42,7 @@ type App struct {
 
 	helpOpen        bool
 	confirmOpen     bool
+	refsOpen        bool
 	renameOpen      bool
 	pendingDeleteIdx int
 
@@ -464,6 +466,14 @@ func (a *App) setupKeybindings() {
 			return event
 		}
 
+		if a.refsOpen {
+			if event.Key() == tcell.KeyEsc {
+				a.closeReferences()
+				return nil
+			}
+			return event // allow scrolling with arrow keys
+		}
+
 		// Search mode: capture all input for the search query
 		if a.searchMode {
 			switch event.Key() {
@@ -572,6 +582,9 @@ func (a *App) setupKeybindings() {
 			if a.currentPanelIdx == 0 {
 				a.toggleExpand()
 				return nil
+			} else if a.currentPanelIdx == 1 && !a.diffMode {
+				a.showReferences()
+				return nil
 			}
 		case tcell.KeyTab:
 			a.nextPanel()
@@ -670,7 +683,7 @@ func (a *App) updateStatusBar() {
 		if a.diffMode {
 			a.statusBarLeft.SetText(" Navigate: j/k | Scroll: J/K | Resolve: v | Search: / | Exit diff: Esc | Help: ? | Quit: q")
 		} else {
-			a.statusBarLeft.SetText(" Navigate: j/k | Select: Space | Dup: d | Rename: r | Del: D | Edit: e | Resolve: v | Diff: w | Search: / | Help: ?")
+			a.statusBarLeft.SetText(" Navigate: j/k | Refs: Enter | Select: Space | Dup: d | Rename: r | Del: D | Edit: e | Resolve: v | Diff: w | Search: / | Help: ?")
 		}
 	default:
 		a.statusBarLeft.SetText(fmt.Sprintf(" Panel %d", a.currentPanelIdx))
@@ -726,6 +739,7 @@ var panelHelpTexts = map[int]string{
   e             Edit in $EDITOR
   v             Toggle resolved view
   w             Diff from this variant
+  Enter         Show experiment references
 
 [green]Viewer:[-]
   J / K         Scroll viewer
@@ -760,6 +774,68 @@ func (a *App) showHelp() {
 func (a *App) closeHelp() {
 	a.helpOpen = false
 	a.pages.RemovePage("help")
+	a.app.SetFocus(a.panels[a.currentPanelIdx])
+	a.updateBorderColors()
+}
+
+func (a *App) showReferences() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.visibleVariantFiles) || a.variantDir == "" {
+		return
+	}
+
+	variantName := a.visibleVariantFiles[idx]
+	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
+
+	a.refsOpen = true
+
+	var text string
+	if err != nil {
+		text = fmt.Sprintf("[red]Error scanning experiments: %s[-]", err.Error())
+	} else if len(refs) == 0 {
+		text = "[darkgray]No experiments reference this variant.[-]"
+	} else {
+		var lines []string
+		for i, name := range refs {
+			lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, name))
+		}
+		text = strings.Join(lines, "\n")
+	}
+
+	refsView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetText(text)
+	refsView.SetBorder(true).
+		SetTitle(fmt.Sprintf(" References: %s ", variantName)).
+		SetBorderColor(tcell.ColorGreen)
+
+	w := len(variantName) + 18
+	for _, ref := range refs {
+		if lineW := len(ref) + 8; lineW > w {
+			w = lineW
+		}
+	}
+	if w < 50 {
+		w = 50
+	}
+	if w > 80 {
+		w = 80
+	}
+	h := len(refs) + 4
+	if h < 5 {
+		h = 5
+	}
+	if h > 20 {
+		h = 20
+	}
+
+	a.pages.AddPage("refs", modal(refsView, w, h), true, true)
+	a.app.SetFocus(refsView)
+}
+
+func (a *App) closeReferences() {
+	a.refsOpen = false
+	a.pages.RemovePage("refs")
 	a.app.SetFocus(a.panels[a.currentPanelIdx])
 	a.updateBorderColors()
 }
