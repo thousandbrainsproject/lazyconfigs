@@ -652,7 +652,12 @@ func (a *App) showDeleteConfirm() {
 		SetTitle(" Confirm Delete ").
 		SetBorderColor(tcell.ColorRed)
 
-	a.pages.AddPage("confirm", modal(confirmView, 45, 5), true, true)
+	// Width: "Delete " + name + ".yaml? (y/n)" + border padding
+	w := len(name) + 28
+	if w < 45 {
+		w = 45
+	}
+	a.pages.AddPage("confirm", modal(confirmView, w, 5), true, true)
 	a.app.SetFocus(confirmView)
 }
 
@@ -712,7 +717,8 @@ func (a *App) showRenameModal() {
 	inputField := tview.NewInputField().
 		SetLabel("New name: ").
 		SetText(name).
-		SetFieldWidth(30)
+		SetFieldWidth(len(name) + 10).
+		SetFieldBackgroundColor(tcell.ColorDefault)
 	inputField.SetDoneFunc(func(key tcell.Key) {
 		if key == tcell.KeyEnter {
 			a.executeRename(idx, inputField.GetText())
@@ -725,7 +731,12 @@ func (a *App) showRenameModal() {
 		SetTitle(" Rename Variant ").
 		SetBorderColor(tcell.ColorGreen)
 
-	a.pages.AddPage("rename", modal(inputField, 50, 3), true, true)
+	// Width: "New name: " + field + border padding
+	w := len(name) + 24
+	if w < 50 {
+		w = 50
+	}
+	a.pages.AddPage("rename", modal(inputField, w, 3), true, true)
 	a.app.SetFocus(inputField)
 }
 
