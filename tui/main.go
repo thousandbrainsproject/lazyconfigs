@@ -17,6 +17,8 @@ const (
 	confirmDelete   confirmAction = iota
 	confirmReassign
 	confirmEdit
+	confirmRename
+	confirmUnassign
 )
 
 type App struct {
@@ -360,8 +362,19 @@ func (a *App) selectVariant() {
 	}
 
 	// Deep node: reassignment modifies a shared config file.
-	// Check if other experiments also use this config.
-	otherRefs := a.findOtherExperimentRefs(node.Value)
+	// Check if other experiments also use this config file.
+	allRefs, err := findFileReferences(a.confDir, node.SourceFilePath)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
+		return
+	}
+	currentExp := a.assignedExperimentName()
+	var otherRefs []string
+	for _, r := range allRefs {
+		if r != currentExp {
+			otherRefs = append(otherRefs, r)
+		}
+	}
 	if len(otherRefs) == 0 {
 		a.executeReassign(newValue)
 		return
@@ -406,82 +419,18 @@ func (a *App) assignedExperimentName() string {
 	return ""
 }
 
-// findOtherExperimentRefs returns experiment names (excluding the current one)
-// that reference the given variant.
-func (a *App) findOtherExperimentRefs(variantName string) []string {
-	if variantName == "" || variantName == "??" {
-		return nil
-	}
-	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
-	if err != nil {
-		return nil
-	}
-	currentExp := a.assignedExperimentName()
-	var otherRefs []string
-	for _, r := range refs {
-		if r != currentExp {
-			otherRefs = append(otherRefs, r)
-		}
-	}
-	return otherRefs
-}
-
 // showReassignConfirm displays a confirmation modal listing other experiments
 // that reference the current variant before allowing reassignment.
 func (a *App) showReassignConfirm(currentVariant, newVariant string, otherRefs []string) {
 	a.pendingReassignValue = newVariant
 	a.pendingConfirmAction = confirmReassign
-	a.confirmOpen = true
-
-	const maxVisible = 10
-	var lines []string
-	shown := otherRefs
-	if len(shown) > maxVisible {
-		shown = shown[:maxVisible]
-	}
-	for i, name := range shown {
-		lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, name))
-	}
-	if remaining := len(otherRefs) - maxVisible; remaining > 0 {
-		lines = append(lines, fmt.Sprintf("  [darkgray]and %d more experiments[-]", remaining))
-	}
-
-	text := fmt.Sprintf(
-		"\n[yellow]%s[-] is also used by:\n%s\n\nReassign to [yellow]%s[-]? [green](y/n)[-]",
-		currentVariant, strings.Join(lines, "\n"), newVariant,
-	)
-
-	confirmView := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(text)
-	confirmView.SetBorder(true).
-		SetTitle(" Confirm Reassign ").
-		SetBorderColor(tcell.ColorYellow)
-
-	displayCount := len(shown)
-	if len(otherRefs) > maxVisible {
-		displayCount++ // "and XX more" line
-	}
-	w := 60
-	for _, ref := range shown {
-		if lineW := len(ref) + 10; lineW > w {
-			w = lineW
-		}
-	}
-	if w > 80 {
-		w = 80
-	}
-	h := displayCount + 7
-	if h < 7 {
-		h = 7
-	}
-	if h > 20 {
-		h = 20
-	}
-
-	a.pages.AddPage("confirm", modal(confirmView, w, h), true, true)
-	a.app.SetFocus(confirmView)
+	a.showWarningModal(warningModalConfig{
+		title:       " Confirm Reassign ",
+		borderColor: tcell.ColorYellow,
+		headerText:  fmt.Sprintf("\n[yellow]%s[-] is also used by:\n", currentVariant),
+		footerText:  fmt.Sprintf("\nReassign to [yellow]%s[-]? [green](y/n)[-]", newVariant),
+		refs:        otherRefs,
+	})
 }
 
 // findBuilderNodeIndex finds the index of a node in flatItems by SourceFilePath and Key.
@@ -587,6 +536,12 @@ func (a *App) setupKeybindings() {
 					case confirmEdit:
 						a.closeConfirm()
 						a.executeEditVariant()
+					case confirmRename:
+						a.closeConfirm()
+						a.showRenameInput()
+					case confirmUnassign:
+						a.executeUnassign()
+						a.closeConfirm()
 					}
 					return nil
 				case 'n', 'N', 'q':
@@ -696,7 +651,7 @@ func (a *App) setupKeybindings() {
 				}
 			case 'r':
 				if a.currentPanelIdx == 1 && !a.diffMode {
-					a.showRenameModal()
+					a.renameVariant()
 					return nil
 				}
 			case 'D':
@@ -1037,70 +992,23 @@ func (a *App) showDeleteConfirm() {
 
 	a.pendingDeleteIdx = idx
 	a.pendingConfirmAction = confirmDelete
-	a.confirmOpen = true
 
 	name := a.visibleVariantFiles[idx]
 
 	// Find all experiments referencing this variant (including current).
-	refs, _ := findVariantReferences(a.confDir, a.variantDir, name)
-
-	var refsText string
-	if len(refs) == 0 {
-		refsText = "[darkgray]Not used by any experiments.[-]"
-	} else {
-		const maxVisible = 10
-		shown := refs
-		if len(shown) > maxVisible {
-			shown = shown[:maxVisible]
-		}
-		var lines []string
-		for i, r := range shown {
-			lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, r))
-		}
-		if remaining := len(refs) - maxVisible; remaining > 0 {
-			lines = append(lines, fmt.Sprintf("  [darkgray]and %d more experiments[-]", remaining))
-		}
-		refsText = fmt.Sprintf("[red]Used by:[-]\n%s", strings.Join(lines, "\n"))
+	refs, err := findVariantReferences(a.confDir, a.variantDir, name)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
+		return
 	}
 
-	text := fmt.Sprintf(
-		"\nDelete [yellow]%s.yaml[-]?\n\n%s\n\n[green](y/n)[-]",
-		name, refsText,
-	)
-
-	confirmView := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(text)
-	confirmView.SetBorder(true).
-		SetTitle(" Confirm Delete ").
-		SetBorderColor(tcell.ColorRed)
-
-	displayCount := len(refs)
-	if displayCount > 10 {
-		displayCount = 11 // 10 + "and XX more" line
-	}
-	w := len(name) + 28
-	if w < 50 {
-		w = 50
-	}
-	for _, ref := range refs {
-		if lineW := len(ref) + 10; lineW > w {
-			w = lineW
-		}
-	}
-	if w > 80 {
-		w = 80
-	}
-	h := displayCount + 9
-	if h < 8 {
-		h = 8
-	}
-	if h > 22 {
-		h = 22
-	}
-	a.pages.AddPage("confirm", modal(confirmView, w, h), true, true)
-	a.app.SetFocus(confirmView)
+	a.showWarningModal(warningModalConfig{
+		title:       " Confirm Delete ",
+		borderColor: tcell.ColorRed,
+		headerText:  fmt.Sprintf("\nDelete [yellow]%s.yaml[-]?\n", name),
+		footerText:  "\n[green](y/n)[-]",
+		refs:        refs,
+	})
 }
 
 // executeDelete performs the actual file deletion after confirmation.
@@ -1142,18 +1050,63 @@ func (a *App) executeDelete() {
 
 // unassignBuilderNode sets the selected builder node's value to "??" in the
 // config file, effectively unassigning the package without deleting any files.
+// For deep nodes (shared configs), a warning is shown if other experiments
+// reference the containing file.
 func (a *App) unassignBuilderNode() {
-	if a.selectedBuilderNode == nil || a.selectedBuilderNode.Value == "??" {
+	node := a.selectedBuilderNode
+	if node == nil || node.Value == "??" {
 		return
 	}
 
-	if err := updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, "??"); err != nil {
+	// Top-level: no warning needed
+	if node.SourceFilePath == a.expPath {
+		a.executeUnassign()
+		return
+	}
+
+	// Deep node: check who uses the containing file
+	allRefs, err := findFileReferences(a.confDir, node.SourceFilePath)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
+		return
+	}
+	currentExp := a.assignedExperimentName()
+	var otherRefs []string
+	for _, r := range allRefs {
+		if r != currentExp {
+			otherRefs = append(otherRefs, r)
+		}
+	}
+	if len(otherRefs) == 0 {
+		a.executeUnassign()
+		return
+	}
+
+	a.pendingConfirmAction = confirmUnassign
+	a.showWarningModal(warningModalConfig{
+		title:       " Confirm Unassign ",
+		borderColor: tcell.ColorYellow,
+		headerText:  fmt.Sprintf("\nUnassigning [yellow]%s[-] also affects:\n", node.Key),
+		footerText:  "\nUnassign anyway? [green](y/n)[-]",
+		refs:        otherRefs,
+	})
+}
+
+// executeUnassign performs the actual unassign operation, setting the node
+// value to "??" and refreshing the UI.
+func (a *App) executeUnassign() {
+	node := a.selectedBuilderNode
+	if node == nil {
+		return
+	}
+
+	if err := updateDefaultValue(node.SourceFilePath, node.RawKey, "??"); err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
 		return
 	}
 
-	sourceFile := a.selectedBuilderNode.SourceFilePath
-	key := a.selectedBuilderNode.Key
+	sourceFile := node.SourceFilePath
+	key := node.Key
 	a.refreshAll()
 	restoredIdx := a.findBuilderNodeIndex(sourceFile, key)
 	if restoredIdx >= 0 {
@@ -1173,8 +1126,108 @@ func (a *App) closeConfirm() {
 	a.updateBorderColors()
 }
 
-// showRenameModal shows an input modal for renaming the selected variant.
-func (a *App) showRenameModal() {
+// warningModalConfig holds parameters for building a shared warning modal.
+type warningModalConfig struct {
+	title       string
+	borderColor tcell.Color
+	headerText  string   // text before ref list
+	footerText  string   // text after ref list
+	refs        []string // experiment names
+}
+
+// showWarningModal displays a confirmation modal with a truncated list of
+// experiment references. It sets confirmOpen, adds a "confirm" page, and
+// focuses the modal.
+func (a *App) showWarningModal(cfg warningModalConfig) {
+	a.confirmOpen = true
+
+	const maxVisible = 10
+	shown := cfg.refs
+	if len(shown) > maxVisible {
+		shown = shown[:maxVisible]
+	}
+	var lines []string
+	for i, name := range shown {
+		lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, name))
+	}
+	if remaining := len(cfg.refs) - maxVisible; remaining > 0 {
+		lines = append(lines, fmt.Sprintf("  [darkgray]and %d more experiments[-]", remaining))
+	}
+
+	var text string
+	if len(cfg.refs) == 0 {
+		text = fmt.Sprintf("%s%s", cfg.headerText, cfg.footerText)
+	} else {
+		text = fmt.Sprintf("%s\n%s%s", cfg.headerText, strings.Join(lines, "\n"), cfg.footerText)
+	}
+
+	confirmView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(text)
+	confirmView.SetBorder(true).
+		SetTitle(cfg.title).
+		SetBorderColor(cfg.borderColor)
+
+	displayCount := len(shown)
+	if len(cfg.refs) > maxVisible {
+		displayCount++
+	}
+	w := 50
+	if titleW := len(cfg.title) + 4; titleW > w {
+		w = titleW
+	}
+	for _, ref := range shown {
+		if lineW := len(ref) + 10; lineW > w {
+			w = lineW
+		}
+	}
+	if w > 80 {
+		w = 80
+	}
+	h := displayCount + 7
+	if h < 7 {
+		h = 7
+	}
+	if h > 22 {
+		h = 22
+	}
+
+	a.pages.AddPage("confirm", modal(confirmView, w, h), true, true)
+	a.app.SetFocus(confirmView)
+}
+
+// renameVariant checks for references before showing the rename input.
+// If other experiments reference the variant, a warning modal is shown first.
+func (a *App) renameVariant() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
+		return
+	}
+
+	variantName := a.visibleVariantFiles[idx]
+	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
+		return
+	}
+	if len(refs) == 0 {
+		a.showRenameInput()
+		return
+	}
+
+	a.pendingConfirmAction = confirmRename
+	a.showWarningModal(warningModalConfig{
+		title:       " Confirm Rename ",
+		borderColor: tcell.ColorYellow,
+		headerText:  fmt.Sprintf("\nRenaming [yellow]%s[-] will update references in:\n", variantName),
+		footerText:  "\nProceed? [green](y/n)[-]",
+		refs:        refs,
+	})
+}
+
+// showRenameInput displays the InputField modal for entering a new variant name.
+func (a *App) showRenameInput() {
 	idx := a.variantsPanel.GetCurrentItem()
 	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
@@ -1200,7 +1253,6 @@ func (a *App) showRenameModal() {
 		SetTitle(" Rename Variant ").
 		SetBorderColor(tcell.ColorGreen)
 
-	// Width: "New name: " + field + border padding
 	w := len(name) + 24
 	if w < 50 {
 		w = 50
@@ -1209,7 +1261,8 @@ func (a *App) showRenameModal() {
 	a.app.SetFocus(inputField)
 }
 
-// executeRename renames the variant file and updates the config if it was the active variant.
+// executeRename renames the variant file and propagates the rename across all
+// experiments that reference it.
 func (a *App) executeRename(idx int, newName string) {
 	if idx < 0 || idx >= len(a.visibleVariantFiles) || newName == "" {
 		a.closeRename()
@@ -1218,6 +1271,14 @@ func (a *App) executeRename(idx int, newName string) {
 
 	oldName := a.visibleVariantFiles[idx]
 	if oldName == newName {
+		a.closeRename()
+		return
+	}
+
+	// Collect detailed refs BEFORE renaming the file on disk.
+	detailedRefs, err := findVariantReferencesDetailed(a.confDir, a.variantDir, oldName)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
 		a.closeRename()
 		return
 	}
@@ -1231,25 +1292,33 @@ func (a *App) executeRename(idx int, newName string) {
 		return
 	}
 
-	// If the renamed variant was the active one, update the config
-	if a.selectedBuilderNode != nil && a.selectedBuilderNode.Value == oldName {
-		if err := updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, newName); err != nil {
-			a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
+	// Update all referencing YAML files.
+	for _, ref := range detailedRefs {
+		if err := updateDefaultValue(ref.SourceFilePath, ref.RawKey, newName); err != nil {
+			// Rollback file rename on failure.
+			_ = os.Rename(newPath, oldPath)
+			a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating %s: %s[-]", ref.SourceFilePath, err.Error()))
 			a.closeRename()
 			return
 		}
+	}
 
-		sourceFile := a.selectedBuilderNode.SourceFilePath
-		key := a.selectedBuilderNode.Key
-		a.refreshAll()
+	a.closeRename()
+
+	sourceFile := ""
+	key := ""
+	if a.selectedBuilderNode != nil {
+		sourceFile = a.selectedBuilderNode.SourceFilePath
+		key = a.selectedBuilderNode.Key
+	}
+	a.refreshAll()
+	if sourceFile != "" {
 		restoredIdx := a.findBuilderNodeIndex(sourceFile, key)
 		if restoredIdx >= 0 {
 			a.builderPanel.SetCurrentItem(restoredIdx)
 			a.selectedBuilderNode = a.flatItems[restoredIdx]
 		}
 	}
-
-	a.closeRename()
 	a.populateVariants(a.selectedBuilderNode)
 }
 
@@ -1261,7 +1330,7 @@ func (a *App) closeRename() {
 	a.updateBorderColors()
 }
 
-// editVariantInEditor checks if the selected variant is shared by other
+// editVariantInEditor checks if the selected variant is referenced by any
 // experiments and shows a confirmation modal if so, otherwise opens the editor.
 func (a *App) editVariantInEditor() {
 	idx := a.variantsPanel.GetCurrentItem()
@@ -1270,70 +1339,24 @@ func (a *App) editVariantInEditor() {
 	}
 
 	variantName := a.visibleVariantFiles[idx]
-	otherRefs := a.findOtherExperimentRefs(variantName)
-	if len(otherRefs) == 0 {
+	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
+		return
+	}
+	if len(refs) == 0 {
 		a.executeEditVariant()
 		return
 	}
 
-	a.showEditConfirm(variantName, otherRefs)
-}
-
-// showEditConfirm displays a confirmation modal warning that editing a variant
-// file will affect other experiments.
-func (a *App) showEditConfirm(variantName string, otherRefs []string) {
 	a.pendingConfirmAction = confirmEdit
-	a.confirmOpen = true
-
-	const maxVisible = 10
-	shown := otherRefs
-	if len(shown) > maxVisible {
-		shown = shown[:maxVisible]
-	}
-	var lines []string
-	for i, name := range shown {
-		lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, name))
-	}
-	if remaining := len(otherRefs) - maxVisible; remaining > 0 {
-		lines = append(lines, fmt.Sprintf("  [darkgray]and %d more experiments[-]", remaining))
-	}
-
-	text := fmt.Sprintf(
-		"\n[yellow]%s[-] is also used by:\n%s\n\nEdit anyway? [green](y/n)[-]",
-		variantName, strings.Join(lines, "\n"),
-	)
-
-	confirmView := tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignCenter).
-		SetText(text)
-	confirmView.SetBorder(true).
-		SetTitle(" Confirm Edit ").
-		SetBorderColor(tcell.ColorYellow)
-
-	displayCount := len(shown)
-	if len(otherRefs) > maxVisible {
-		displayCount++
-	}
-	w := 60
-	for _, ref := range shown {
-		if lineW := len(ref) + 10; lineW > w {
-			w = lineW
-		}
-	}
-	if w > 80 {
-		w = 80
-	}
-	h := displayCount + 7
-	if h < 7 {
-		h = 7
-	}
-	if h > 20 {
-		h = 20
-	}
-
-	a.pages.AddPage("confirm", modal(confirmView, w, h), true, true)
-	a.app.SetFocus(confirmView)
+	a.showWarningModal(warningModalConfig{
+		title:       " Confirm Edit ",
+		borderColor: tcell.ColorYellow,
+		headerText:  fmt.Sprintf("\n[yellow]%s[-] is used by:\n", variantName),
+		footerText:  "\nEdit anyway? [green](y/n)[-]",
+		refs:        refs,
+	})
 }
 
 // executeEditVariant opens the selected variant file in $EDITOR.

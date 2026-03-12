@@ -228,19 +228,13 @@ func buildTreeRecursive(filePath, confDir string, depth int, parent *TreeNode, v
 	return nodes, nil
 }
 
-// findVariantReferences scans experiment files and returns names of experiments
-// that reference the given variant at any level of the resolved config hierarchy.
-func findVariantReferences(confDir, variantDir, variantName string) ([]string, error) {
-	targetFile := filepath.Join(variantDir, variantName+".yaml")
-	targetAbs, err := filepath.Abs(targetFile)
-	if err != nil {
-		return nil, err
-	}
-
+// findFileReferences scans experiment files and returns names of experiments
+// whose resolved config tree contains a node resolving to targetFilePath.
+func findFileReferences(confDir, targetFilePath string) ([]string, error) {
 	expDir := filepath.Join(confDir, "experiment")
 	var refs []string
 
-	err = filepath.WalkDir(expDir, func(path string, d os.DirEntry, err error) error {
+	err := filepath.WalkDir(expDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
 			return nil
 		}
@@ -248,7 +242,7 @@ func findVariantReferences(confDir, variantDir, variantName string) ([]string, e
 		if err != nil {
 			return nil // skip unparseable files
 		}
-		if treeContainsFile(tree, targetAbs) {
+		if treeContainsFile(tree, targetFilePath) {
 			rel, err := filepath.Rel(expDir, path)
 			if err != nil {
 				rel = filepath.Base(path)
@@ -263,6 +257,87 @@ func findVariantReferences(confDir, variantDir, variantName string) ([]string, e
 
 	sort.Strings(refs)
 	return refs, nil
+}
+
+// findVariantReferences scans experiment files and returns names of experiments
+// that reference the given variant at any level of the resolved config hierarchy.
+func findVariantReferences(confDir, variantDir, variantName string) ([]string, error) {
+	targetFile := filepath.Join(variantDir, variantName+".yaml")
+	targetAbs, err := filepath.Abs(targetFile)
+	if err != nil {
+		return nil, err
+	}
+	return findFileReferences(confDir, targetAbs)
+}
+
+// VariantRef tracks a detailed reference to a variant within an experiment's config tree.
+type VariantRef struct {
+	ExperimentName string
+	SourceFilePath string // the file whose defaults: list references the variant
+	RawKey         string // the key in that defaults: list
+}
+
+// findRefsInTree recursively walks tree nodes and emits VariantRef entries
+// for every node whose FilePath matches targetPath.
+func findRefsInTree(nodes []*TreeNode, targetPath, expName string) []VariantRef {
+	var refs []VariantRef
+	for _, node := range nodes {
+		if node.FilePath == targetPath {
+			refs = append(refs, VariantRef{
+				ExperimentName: expName,
+				SourceFilePath: node.SourceFilePath,
+				RawKey:         node.RawKey,
+			})
+		}
+		refs = append(refs, findRefsInTree(node.Children, targetPath, expName)...)
+	}
+	return refs
+}
+
+// findVariantReferencesDetailed scans experiment files and returns detailed
+// reference information for every location that references the given variant.
+func findVariantReferencesDetailed(confDir, variantDir, variantName string) ([]VariantRef, error) {
+	targetFile := filepath.Join(variantDir, variantName+".yaml")
+	targetAbs, err := filepath.Abs(targetFile)
+	if err != nil {
+		return nil, err
+	}
+
+	expDir := filepath.Join(confDir, "experiment")
+	var allRefs []VariantRef
+
+	err = filepath.WalkDir(expDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
+			return nil
+		}
+		tree, err := buildTree(path, confDir)
+		if err != nil {
+			return nil
+		}
+		rel, err := filepath.Rel(expDir, path)
+		if err != nil {
+			rel = filepath.Base(path)
+		}
+		expName := strings.TrimSuffix(rel, ".yaml")
+		allRefs = append(allRefs, findRefsInTree(tree, targetAbs, expName)...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Deduplicate by SourceFilePath+RawKey
+	seen := make(map[string]bool)
+	var unique []VariantRef
+	for _, ref := range allRefs {
+		key := ref.SourceFilePath + "\x00" + ref.RawKey
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, ref)
+		}
+	}
+
+	return unique, nil
 }
 
 // treeContainsFile recursively checks if any node in the tree resolves to the target file path.
