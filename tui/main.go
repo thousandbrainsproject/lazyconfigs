@@ -11,6 +11,14 @@ import (
 	"github.com/rivo/tview"
 )
 
+type confirmAction int
+
+const (
+	confirmDelete   confirmAction = iota
+	confirmReassign
+	confirmEdit
+)
+
 type App struct {
 	app             *tview.Application
 	pages           *tview.Pages
@@ -40,11 +48,16 @@ type App struct {
 	diffFromIdx  int
 	diffFromFile string
 
-	helpOpen        bool
-	confirmOpen     bool
-	refsOpen        bool
-	renameOpen      bool
-	pendingDeleteIdx int
+	helpOpen             bool
+	confirmOpen          bool
+	refsOpen             bool
+	renameOpen           bool
+	pendingDeleteIdx     int
+	pendingConfirmAction confirmAction
+	pendingReassignValue string
+
+	expName string
+	expPath string
 
 	searchMode  bool
 	searchQuery string
@@ -185,6 +198,11 @@ func (a *App) refreshAll() {
 
 	// Load tree from hardcoded experiment
 	expPath := filepath.Join(a.confDir, "experiment", "base_config_10distinctobj_dist_agent.yaml")
+	a.expName = strings.TrimSuffix(filepath.Base(expPath), ".yaml")
+	absExpPath, err := filepath.Abs(expPath)
+	if err == nil {
+		a.expPath = absExpPath
+	}
 	roots, err := buildTree(expPath, a.confDir)
 	if err != nil {
 		a.builderPanel.Clear()
@@ -321,7 +339,8 @@ func (a *App) populateVariants(node *TreeNode) {
 }
 
 // selectVariant selects the highlighted variant, updates the YAML config file,
-// and refreshes the tree.
+// and refreshes the tree. For nodes deeper than the experiment level (shared
+// configs), a confirmation modal is shown if other experiments are affected.
 func (a *App) selectVariant() {
 	idx := a.variantsPanel.GetCurrentItem()
 	if idx < 0 || idx >= len(a.visibleVariantFiles) || a.selectedBuilderNode == nil {
@@ -331,24 +350,128 @@ func (a *App) selectVariant() {
 	newValue := a.visibleVariantFiles[idx]
 	node := a.selectedBuilderNode
 
+	if newValue == node.Value {
+		return
+	}
+
+	// Top-level nodes modify the experiment file directly — only affects
+	// the current experiment, so no warning needed.
+	if node.SourceFilePath == a.expPath {
+		a.executeReassign(newValue)
+		return
+	}
+
+	// Deep node: reassignment modifies a shared config file.
+	// Check if other experiments also use this config.
+	otherRefs := a.findOtherExperimentRefs(node.Value)
+	if len(otherRefs) == 0 {
+		a.executeReassign(newValue)
+		return
+	}
+
+	a.showReassignConfirm(node.Value, newValue, otherRefs)
+}
+
+// executeReassign performs the actual variant reassignment.
+func (a *App) executeReassign(newValue string) {
+	node := a.selectedBuilderNode
+	if node == nil {
+		return
+	}
+
 	if err := updateDefaultValue(node.SourceFilePath, node.RawKey, newValue); err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
 		return
 	}
 
-	// Save identifiers for cursor restoration
 	sourceFile := node.SourceFilePath
 	key := node.Key
 
 	a.refreshAll()
 
-	// Restore builder cursor to the same node
 	restoredIdx := a.findBuilderNodeIndex(sourceFile, key)
 	if restoredIdx >= 0 {
 		a.builderPanel.SetCurrentItem(restoredIdx)
 		a.selectedBuilderNode = a.flatItems[restoredIdx]
 		a.populateVariants(a.selectedBuilderNode)
 	}
+}
+
+// findOtherExperimentRefs returns experiment names (excluding the current one)
+// that reference the given variant.
+func (a *App) findOtherExperimentRefs(variantName string) []string {
+	if variantName == "" || variantName == "??" {
+		return nil
+	}
+	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
+	if err != nil {
+		return nil
+	}
+	var otherRefs []string
+	for _, r := range refs {
+		if r != a.expName {
+			otherRefs = append(otherRefs, r)
+		}
+	}
+	return otherRefs
+}
+
+// showReassignConfirm displays a confirmation modal listing other experiments
+// that reference the current variant before allowing reassignment.
+func (a *App) showReassignConfirm(currentVariant, newVariant string, otherRefs []string) {
+	a.pendingReassignValue = newVariant
+	a.pendingConfirmAction = confirmReassign
+	a.confirmOpen = true
+
+	const maxVisible = 10
+	var lines []string
+	shown := otherRefs
+	if len(shown) > maxVisible {
+		shown = shown[:maxVisible]
+	}
+	for i, name := range shown {
+		lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, name))
+	}
+	if remaining := len(otherRefs) - maxVisible; remaining > 0 {
+		lines = append(lines, fmt.Sprintf("  [darkgray]and %d more experiments[-]", remaining))
+	}
+
+	text := fmt.Sprintf(
+		"\n[yellow]%s[-] is also used by:\n%s\n\nReassign to [yellow]%s[-]? [green](y/n)[-]",
+		currentVariant, strings.Join(lines, "\n"), newVariant,
+	)
+
+	confirmView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(text)
+	confirmView.SetBorder(true).
+		SetTitle(" Confirm Reassign ").
+		SetBorderColor(tcell.ColorYellow)
+
+	displayCount := len(shown)
+	if len(otherRefs) > maxVisible {
+		displayCount++ // "and XX more" line
+	}
+	w := 60
+	for _, ref := range shown {
+		if lineW := len(ref) + 10; lineW > w {
+			w = lineW
+		}
+	}
+	if w > 80 {
+		w = 80
+	}
+	h := displayCount + 7
+	if h < 7 {
+		h = 7
+	}
+	if h > 20 {
+		h = 20
+	}
+
+	a.pages.AddPage("confirm", modal(confirmView, w, h), true, true)
+	a.app.SetFocus(confirmView)
 }
 
 // findBuilderNodeIndex finds the index of a node in flatItems by SourceFilePath and Key.
@@ -445,7 +568,16 @@ func (a *App) setupKeybindings() {
 			case tcell.KeyRune:
 				switch event.Rune() {
 				case 'y', 'Y':
-					a.executeDelete()
+					switch a.pendingConfirmAction {
+					case confirmDelete:
+						a.executeDelete()
+					case confirmReassign:
+						a.executeReassign(a.pendingReassignValue)
+						a.closeConfirm()
+					case confirmEdit:
+						a.closeConfirm()
+						a.executeEditVariant()
+					}
 					return nil
 				case 'n', 'N', 'q':
 					a.closeConfirm()
@@ -885,7 +1017,8 @@ func (a *App) duplicateVariant() {
 	a.populateVariants(a.selectedBuilderNode)
 }
 
-// showDeleteConfirm shows a confirmation modal for deleting the selected variant.
+// showDeleteConfirm shows a confirmation modal for deleting the selected variant,
+// including the list of experiments that reference it.
 func (a *App) showDeleteConfirm() {
 	idx := a.variantsPanel.GetCurrentItem()
 	if idx < 0 || idx >= len(a.visibleVariantFiles) {
@@ -893,23 +1026,70 @@ func (a *App) showDeleteConfirm() {
 	}
 
 	a.pendingDeleteIdx = idx
+	a.pendingConfirmAction = confirmDelete
 	a.confirmOpen = true
 
 	name := a.visibleVariantFiles[idx]
+
+	// Find all experiments referencing this variant (including current).
+	refs, _ := findVariantReferences(a.confDir, a.variantDir, name)
+
+	var refsText string
+	if len(refs) == 0 {
+		refsText = "[darkgray]Not used by any experiments.[-]"
+	} else {
+		const maxVisible = 10
+		shown := refs
+		if len(shown) > maxVisible {
+			shown = shown[:maxVisible]
+		}
+		var lines []string
+		for i, r := range shown {
+			lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, r))
+		}
+		if remaining := len(refs) - maxVisible; remaining > 0 {
+			lines = append(lines, fmt.Sprintf("  [darkgray]and %d more experiments[-]", remaining))
+		}
+		refsText = fmt.Sprintf("[red]Used by:[-]\n%s", strings.Join(lines, "\n"))
+	}
+
+	text := fmt.Sprintf(
+		"\nDelete [yellow]%s.yaml[-]?\n\n%s\n\n[green](y/n)[-]",
+		name, refsText,
+	)
+
 	confirmView := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter).
-		SetText(fmt.Sprintf("\nDelete [yellow]%s.yaml[-]? [green](y/n)[-]", name))
+		SetText(text)
 	confirmView.SetBorder(true).
 		SetTitle(" Confirm Delete ").
 		SetBorderColor(tcell.ColorRed)
 
-	// Width: "Delete " + name + ".yaml? (y/n)" + border padding
-	w := len(name) + 28
-	if w < 45 {
-		w = 45
+	displayCount := len(refs)
+	if displayCount > 10 {
+		displayCount = 11 // 10 + "and XX more" line
 	}
-	a.pages.AddPage("confirm", modal(confirmView, w, 5), true, true)
+	w := len(name) + 28
+	if w < 50 {
+		w = 50
+	}
+	for _, ref := range refs {
+		if lineW := len(ref) + 10; lineW > w {
+			w = lineW
+		}
+	}
+	if w > 80 {
+		w = 80
+	}
+	h := displayCount + 9
+	if h < 8 {
+		h = 8
+	}
+	if h > 22 {
+		h = 22
+	}
+	a.pages.AddPage("confirm", modal(confirmView, w, h), true, true)
 	a.app.SetFocus(confirmView)
 }
 
@@ -973,9 +1153,11 @@ func (a *App) unassignBuilderNode() {
 	a.populateVariants(a.selectedBuilderNode)
 }
 
-// closeConfirm closes the delete confirmation modal.
+// closeConfirm closes the confirmation modal and resets pending state.
 func (a *App) closeConfirm() {
 	a.confirmOpen = false
+	a.pendingConfirmAction = confirmDelete
+	a.pendingReassignValue = ""
 	a.pages.RemovePage("confirm")
 	a.app.SetFocus(a.panels[a.currentPanelIdx])
 	a.updateBorderColors()
@@ -1069,8 +1251,83 @@ func (a *App) closeRename() {
 	a.updateBorderColors()
 }
 
-// editVariantInEditor opens the selected variant file in $EDITOR.
+// editVariantInEditor checks if the selected variant is shared by other
+// experiments and shows a confirmation modal if so, otherwise opens the editor.
 func (a *App) editVariantInEditor() {
+	idx := a.variantsPanel.GetCurrentItem()
+	if idx < 0 || idx >= len(a.visibleVariantFiles) {
+		return
+	}
+
+	variantName := a.visibleVariantFiles[idx]
+	otherRefs := a.findOtherExperimentRefs(variantName)
+	if len(otherRefs) == 0 {
+		a.executeEditVariant()
+		return
+	}
+
+	a.showEditConfirm(variantName, otherRefs)
+}
+
+// showEditConfirm displays a confirmation modal warning that editing a variant
+// file will affect other experiments.
+func (a *App) showEditConfirm(variantName string, otherRefs []string) {
+	a.pendingConfirmAction = confirmEdit
+	a.confirmOpen = true
+
+	const maxVisible = 10
+	shown := otherRefs
+	if len(shown) > maxVisible {
+		shown = shown[:maxVisible]
+	}
+	var lines []string
+	for i, name := range shown {
+		lines = append(lines, fmt.Sprintf("  [green]%d.[-] %s", i+1, name))
+	}
+	if remaining := len(otherRefs) - maxVisible; remaining > 0 {
+		lines = append(lines, fmt.Sprintf("  [darkgray]and %d more experiments[-]", remaining))
+	}
+
+	text := fmt.Sprintf(
+		"\n[yellow]%s[-] is also used by:\n%s\n\nEdit anyway? [green](y/n)[-]",
+		variantName, strings.Join(lines, "\n"),
+	)
+
+	confirmView := tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignCenter).
+		SetText(text)
+	confirmView.SetBorder(true).
+		SetTitle(" Confirm Edit ").
+		SetBorderColor(tcell.ColorYellow)
+
+	displayCount := len(shown)
+	if len(otherRefs) > maxVisible {
+		displayCount++
+	}
+	w := 60
+	for _, ref := range shown {
+		if lineW := len(ref) + 10; lineW > w {
+			w = lineW
+		}
+	}
+	if w > 80 {
+		w = 80
+	}
+	h := displayCount + 7
+	if h < 7 {
+		h = 7
+	}
+	if h > 20 {
+		h = 20
+	}
+
+	a.pages.AddPage("confirm", modal(confirmView, w, h), true, true)
+	a.app.SetFocus(confirmView)
+}
+
+// executeEditVariant opens the selected variant file in $EDITOR.
+func (a *App) executeEditVariant() {
 	idx := a.variantsPanel.GetCurrentItem()
 	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
