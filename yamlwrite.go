@@ -3,12 +3,13 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
 // updateDefaultValue modifies a defaults: entry in a YAML file, preserving
-// comments and structure via the yaml.Node API.
+// comments and structure by doing a surgical byte-level replacement.
 // rawKey must match exactly what's in the YAML (e.g., "/monty", "config").
 func updateDefaultValue(filePath, rawKey, newValue string) error {
 	data, err := os.ReadFile(filePath)
@@ -45,34 +46,49 @@ func updateDefaultValue(filePath, rawKey, newValue string) error {
 		return fmt.Errorf("defaults: is not a sequence in %s", filePath)
 	}
 
-	// Walk sequence items to find the matching rawKey
-	found := false
+	// Walk sequence items to find the matching rawKey and its value node
+	var valNode *yaml.Node
 	for _, item := range defaultsNode.Content {
 		if item.Kind != yaml.MappingNode {
 			continue
 		}
 		for i := 0; i < len(item.Content)-1; i += 2 {
 			keyNode := item.Content[i]
-			valNode := item.Content[i+1]
 			if keyNode.Value == rawKey {
-				valNode.Value = newValue
-				valNode.Tag = "!!str"
-				found = true
+				valNode = item.Content[i+1]
 				break
 			}
 		}
-		if found {
+		if valNode != nil {
 			break
 		}
 	}
-	if !found {
+	if valNode == nil {
 		return fmt.Errorf("key %q not found in defaults of %s", rawKey, filePath)
 	}
 
-	out, err := yaml.Marshal(&doc)
-	if err != nil {
-		return err
+	// Use the value node's line/column to do a surgical replacement
+	// in the original file content, preserving all formatting.
+	lines := strings.Split(string(data), "\n")
+	lineIdx := valNode.Line - 1 // yaml.Node.Line is 1-based
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return fmt.Errorf("value node line %d out of range in %s", valNode.Line, filePath)
 	}
 
-	return os.WriteFile(filePath, out, 0644)
+	line := lines[lineIdx]
+	colIdx := valNode.Column - 1 // yaml.Node.Column is 1-based
+	if colIdx < 0 || colIdx > len(line) {
+		return fmt.Errorf("value node column %d out of range in %s", valNode.Column, filePath)
+	}
+
+	// Replace from the column position to end of the old value
+	oldValue := valNode.Value
+	rest := line[colIdx:]
+	if !strings.HasPrefix(rest, oldValue) {
+		return fmt.Errorf("expected %q at line %d col %d in %s, got %q",
+			oldValue, valNode.Line, valNode.Column, filePath, rest)
+	}
+	lines[lineIdx] = line[:colIdx] + newValue + line[colIdx+len(oldValue):]
+
+	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
 }
