@@ -56,7 +56,6 @@ type App struct {
 	pendingConfirmAction confirmAction
 	pendingReassignValue string
 
-	expName string
 	expPath string
 
 	searchMode  bool
@@ -196,9 +195,8 @@ func (a *App) refreshAll() {
 	// Save expanded state before rebuilding
 	expanded := collectExpanded(a.rootNodes)
 
-	// Load tree from hardcoded experiment
-	expPath := filepath.Join(a.confDir, "experiment", "base_config_10distinctobj_dist_agent.yaml")
-	a.expName = strings.TrimSuffix(filepath.Base(expPath), ".yaml")
+	// Load tree from root config
+	expPath := filepath.Join(a.confDir, "experiment.yaml")
 	absExpPath, err := filepath.Abs(expPath)
 	if err == nil {
 		a.expPath = absExpPath
@@ -397,6 +395,17 @@ func (a *App) executeReassign(newValue string) {
 	}
 }
 
+// assignedExperimentName returns the currently assigned experiment variant
+// name by inspecting the root tree nodes, or empty string if unassigned.
+func (a *App) assignedExperimentName() string {
+	for _, node := range a.rootNodes {
+		if node.Key == "experiment" {
+			return node.Value
+		}
+	}
+	return ""
+}
+
 // findOtherExperimentRefs returns experiment names (excluding the current one)
 // that reference the given variant.
 func (a *App) findOtherExperimentRefs(variantName string) []string {
@@ -407,9 +416,10 @@ func (a *App) findOtherExperimentRefs(variantName string) []string {
 	if err != nil {
 		return nil
 	}
+	currentExp := a.assignedExperimentName()
 	var otherRefs []string
 	for _, r := range refs {
-		if r != a.expName {
+		if r != currentExp {
 			otherRefs = append(otherRefs, r)
 		}
 	}
