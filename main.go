@@ -127,7 +127,7 @@ func newApp() *App {
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignRight)
 	statusBarRight.SetBorder(false)
-	statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] 0.0.1 ")
+	statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + Version + " ")
 
 	a := &App{
 		app:            tview.NewApplication(),
@@ -294,7 +294,7 @@ func (a *App) populateVariants(node *TreeNode) {
 		a.searchMode = false
 		a.searchQuery = ""
 		a.updateStatusBar()
-		a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] 0.0.1 ")
+		a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + Version + " ")
 	}
 
 	// Reset diff state — the variant list is about to change, so diffFromIdx

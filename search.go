@@ -87,7 +87,7 @@ func (a *App) exitSearchMode() {
 
 	a.searchQuery = ""
 	a.updateStatusBar()
-	a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] 0.0.1 ")
+	a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + Version + " ")
 }
 
 // applySearch dispatches filtering to the correct panel.
