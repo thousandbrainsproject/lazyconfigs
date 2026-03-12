@@ -19,7 +19,7 @@ func generateDiff(fromContent, toContent, fromLabel, toLabel string) (string, er
 	return difflib.GetUnifiedDiffString(diff)
 }
 
-func colorizeDiff(diffText string) string {
+func colorizeDiff(diffText string, theme ThemeColors) string {
 	lines := strings.Split(diffText, "\n")
 	// strings.Split produces a trailing empty element when input ends with "\n"
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
@@ -33,11 +33,11 @@ func colorizeDiff(diffText string) string {
 		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
 			buf.WriteString(fmt.Sprintf("[::b]%s[-:-:-]\n", escaped))
 		case strings.HasPrefix(line, "+"):
-			buf.WriteString(fmt.Sprintf("[green]%s[-]\n", escaped))
+			buf.WriteString(fmt.Sprintf("[%s]%s[-]\n", theme.Tags.DiffAdd, escaped))
 		case strings.HasPrefix(line, "-"):
-			buf.WriteString(fmt.Sprintf("[red]%s[-]\n", escaped))
+			buf.WriteString(fmt.Sprintf("[%s]%s[-]\n", theme.Tags.DiffRemove, escaped))
 		case strings.HasPrefix(line, "@@"):
-			buf.WriteString(fmt.Sprintf("[yellow]%s[-]\n", escaped))
+			buf.WriteString(fmt.Sprintf("[%s]%s[-]\n", theme.Tags.DiffHunk, escaped))
 		default:
 			buf.WriteString(escaped + "\n")
 		}

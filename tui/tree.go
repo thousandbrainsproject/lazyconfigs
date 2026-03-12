@@ -61,7 +61,7 @@ func flattenTree(roots []*TreeNode) []*TreeNode {
 //	▼ /monty: informed_5          (depth=0, expanded, has children)
 //	  ▶ motor_system_config: x    (depth=1, collapsed, has children)
 //	  · sensor_module: camera      (depth=1, leaf)
-func renderItem(node *TreeNode, selected bool) string {
+func renderItem(node *TreeNode, selected bool, theme ThemeColors) string {
 	indent := strings.Repeat("  ", node.Depth)
 
 	var icon string
@@ -81,35 +81,36 @@ func renderItem(node *TreeNode, selected bool) string {
 		label = node.Key
 	}
 	if node.Value == "??" || node.Error != "" {
-		label = fmt.Sprintf("%s: [red]%s[-]", label, node.Value)
+		label = fmt.Sprintf("%s: [%s]%s[-]", label, theme.Tags.ValueError, node.Value)
 	} else if node.Value != "" {
-		label = fmt.Sprintf("%s: [green]%s[-]", label, node.Value)
+		label = fmt.Sprintf("%s: [%s]%s[-]", label, theme.Tags.ValueOk, node.Value)
 	}
 
 	if selected {
-		return fmt.Sprintf("[::b]%s[#6a9fb5]%s[-] %s[-:-:-]", indent, icon, label)
+		return fmt.Sprintf("[::b]%s[%s]%s[-] %s[-:-:-]", indent, theme.Tags.Cursor, icon, label)
 	}
 	return fmt.Sprintf("[::d]%s%s %s[-:-:-]", indent, icon, label)
 }
 
 // renderVariantItem produces a display string for a variant list item.
 // cursorSelected indicates the cursor is on this item; isActive indicates this is the currently selected variant.
-func renderVariantItem(name string, cursorSelected bool, isActive bool, isDiffFrom bool) string {
+func renderVariantItem(name string, cursorSelected bool, isActive bool, isDiffFrom bool, theme ThemeColors) string {
 	if isDiffFrom {
 		prefix := "  "
 		if isActive {
 			prefix = "* "
 		}
 		if cursorSelected {
-			return fmt.Sprintf("[#ff69b4::b]%s%s[-:-:-]", prefix, name)
+			return fmt.Sprintf("[%s::b]%s%s[-:-:-]", theme.Tags.DiffFrom, prefix, name)
 		}
-		return fmt.Sprintf("[#ff69b4]%s%s[-]", prefix, name)
+		return fmt.Sprintf("[%s]%s%s[-]", theme.Tags.DiffFrom, prefix, name)
 	}
+	activeTag := theme.Tags.ActiveVariant
 	switch {
 	case isActive && cursorSelected:
-		return fmt.Sprintf("[green::b]* %s[-:-:-]", name)
+		return fmt.Sprintf("[%s::b]* %s[-:-:-]", activeTag, name)
 	case isActive:
-		return fmt.Sprintf("[green]* %s[-]", name)
+		return fmt.Sprintf("[%s]* %s[-]", activeTag, name)
 	case cursorSelected:
 		return fmt.Sprintf("[::b]  %s[-:-:-]", name)
 	default:

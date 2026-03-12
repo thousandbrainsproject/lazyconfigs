@@ -27,6 +27,10 @@ type App struct {
 	panels          []tview.Primitive // Only [builderPanel, variantsPanel]
 	currentPanelIdx int
 
+	cfg      Config
+	theme    ThemeColors
+	bindings CompiledBindings
+
 	builderPanel   *tview.List
 	variantsPanel  *tview.List
 	viewerPanel    *tview.TextView
@@ -76,10 +80,26 @@ func newApp() *App {
 		SetHighlightFullLine(true).
 		SetSelectedBackgroundColor(tcell.ColorDefault).
 		SetSelectedTextColor(tcell.ColorDefault)
+	cfg := loadConfig()
+	theme := compileTheme(cfg.Colors)
+	bindings := compileBindings(cfg.Keybindings)
+
+	var confDir string
+	if cfg.ConfDir != "" {
+		confDir = cfg.ConfDir
+	} else {
+		var err error
+		confDir, err = findGitRoot()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: %v, falling back to current directory\n", err)
+			confDir, _ = os.Getwd()
+		}
+	}
+
 	builderPanel.SetBorder(true).
 		SetTitle(" [1] Builder ").
 		SetTitleAlign(tview.AlignLeft).
-		SetBorderColor(tcell.ColorDefault)
+		SetBorderColor(theme.BorderUnfocused)
 
 	variantsPanel := tview.NewList().
 		ShowSecondaryText(false).
@@ -89,7 +109,7 @@ func newApp() *App {
 	variantsPanel.SetBorder(true).
 		SetTitle(" [2] Variants ").
 		SetTitleAlign(tview.AlignLeft).
-		SetBorderColor(tcell.ColorDefault)
+		SetBorderColor(theme.BorderUnfocused)
 
 	viewerPanel := tview.NewTextView().
 		SetDynamicColors(true).
@@ -97,7 +117,7 @@ func newApp() *App {
 	viewerPanel.SetBorder(true).
 		SetTitle(" Viewer ").
 		SetTitleAlign(tview.AlignLeft).
-		SetBorderColor(tcell.ColorDefault)
+		SetBorderColor(theme.BorderUnfocused)
 
 	statusBarLeft := tview.NewTextView().
 		SetDynamicColors(true)
@@ -109,20 +129,11 @@ func newApp() *App {
 	statusBarRight.SetBorder(false)
 	statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] 0.0.1 ")
 
-	exe, err := os.Executable()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot determine executable path: %v\n", err)
-		exe, _ = os.Getwd()
-	}
-	exeDir := filepath.Dir(exe)
-	confDir, err := filepath.Abs(filepath.Join(exeDir, "..", "conf"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot resolve conf directory: %v\n", err)
-		confDir = filepath.Join(exeDir, "..", "conf")
-	}
-
 	a := &App{
-		app:           tview.NewApplication(),
+		app:            tview.NewApplication(),
+		cfg:            cfg,
+		theme:          theme,
+		bindings:       bindings,
 		builderPanel:   builderPanel,
 		variantsPanel:  variantsPanel,
 		viewerPanel:    viewerPanel,
@@ -238,7 +249,7 @@ func (a *App) rebuildBuilderList() {
 	a.visibleBuilderItems = a.flatItems
 	a.builderPanel.Clear()
 	for i, node := range a.flatItems {
-		a.builderPanel.AddItem(renderItem(node, i == currentIdx), "", 0, nil)
+		a.builderPanel.AddItem(renderItem(node, i == currentIdx, a.theme), "", 0, nil)
 	}
 	if currentIdx >= len(a.flatItems) {
 		currentIdx = len(a.flatItems) - 1
@@ -255,7 +266,7 @@ func (a *App) refreshBuilderSelection(selectedIdx int) {
 		if i >= count {
 			break
 		}
-		a.builderPanel.SetItemText(i, renderItem(node, i == selectedIdx), "")
+		a.builderPanel.SetItemText(i, renderItem(node, i == selectedIdx, a.theme), "")
 	}
 }
 
@@ -270,7 +281,7 @@ func (a *App) refreshVariantsSelection(selectedIdx int) {
 			break
 		}
 		isDiffFrom := a.diffMode && i == a.diffFromIdx
-		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx, name == activeValue, isDiffFrom), "")
+		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx, name == activeValue, isDiffFrom, a.theme), "")
 	}
 }
 
@@ -328,7 +339,7 @@ func (a *App) populateVariants(node *TreeNode) {
 	}
 	for i, name := range variants {
 		isActive := name == node.Value
-		a.variantsPanel.AddItem(renderVariantItem(name, i == cursorIdx, isActive, false), "", 0, nil)
+		a.variantsPanel.AddItem(renderVariantItem(name, i == cursorIdx, isActive, false, a.theme), "", 0, nil)
 	}
 
 	// Auto-scroll to active variant
@@ -362,6 +373,11 @@ func (a *App) selectVariant() {
 	}
 
 	// Deep node: reassignment modifies a shared config file.
+	if !a.cfg.Warnings.ShouldWarn(confirmReassign) {
+		a.executeReassign(newValue)
+		return
+	}
+
 	// Check if other experiments also use this config file.
 	allRefs, err := findFileReferences(a.confDir, node.SourceFilePath)
 	if err != nil {
@@ -426,7 +442,7 @@ func (a *App) showReassignConfirm(currentVariant, newVariant string, otherRefs [
 	a.pendingConfirmAction = confirmReassign
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Reassign ",
-		borderColor: tcell.ColorYellow,
+		borderColor: a.theme.ModalWarningBorder,
 		headerText:  fmt.Sprintf("\n[yellow]%s[-] is also used by:\n", currentVariant),
 		footerText:  fmt.Sprintf("\nReassign to [yellow]%s[-]? [green](y/n)[-]", newVariant),
 		refs:        otherRefs,
@@ -601,108 +617,125 @@ func (a *App) setupKeybindings() {
 			return nil
 		}
 
-		// MAIN KEYBINDINGS — only when no modal open
-		switch event.Key() {
-		case tcell.KeyRune:
-			switch event.Rune() {
-			case 'q':
-				a.app.Stop()
-				return nil
-			case '1':
-				a.focusPanel(0)
-				return nil
-			case '2':
-				a.focusPanel(1)
-				return nil
-			case 'h':
-				a.prevPanel()
-				return nil
-			case 'l':
-				a.nextPanel()
-				return nil
-			case 'j':
-				a.cursorDown()
-				return nil
-			case 'k':
-				a.cursorUp()
-				return nil
-			case 'J':
-				a.scrollViewerDown()
-				return nil
-			case 'K':
-				a.scrollViewerUp()
-				return nil
-			case '?':
-				a.showHelp()
-				return nil
-			case ' ':
-				if a.currentPanelIdx == 1 && !a.diffMode {
-					a.selectVariant()
-					return nil
-				}
-			case 'd':
-				if a.currentPanelIdx == 0 {
-					a.unassignBuilderNode()
-					return nil
-				}
-				if a.currentPanelIdx == 1 && !a.diffMode {
-					a.duplicateVariant()
-					return nil
-				}
-			case 'r':
-				if a.currentPanelIdx == 1 && !a.diffMode {
-					a.renameVariant()
-					return nil
-				}
-			case 'D':
-				if a.currentPanelIdx == 1 && !a.diffMode {
-					a.showDeleteConfirm()
-					return nil
-				}
-			case 'e':
-				if a.currentPanelIdx == 1 && !a.diffMode {
-					a.editVariantInEditor()
-					return nil
-				}
-			case 'w':
-				if a.currentPanelIdx == 1 && !a.diffMode {
-					a.enterDiffMode()
-					return nil
-				}
-			case 'v':
-				a.resolvedMode = !a.resolvedMode
-				a.refreshCurrentViewer()
-				return nil
-			case '/':
-				if a.currentPanelIdx == 0 || a.currentPanelIdx == 1 {
-					a.enterSearchMode()
-					return nil
-				}
-			}
-		case tcell.KeyEnter:
-			if a.currentPanelIdx == 0 {
-				a.toggleExpand()
-				return nil
-			} else if a.currentPanelIdx == 1 && !a.diffMode {
-				a.showReferences()
-				return nil
-			}
-		case tcell.KeyTab:
-			a.nextPanel()
-			return nil
-		case tcell.KeyBacktab:
-			a.prevPanel()
-			return nil
-		case tcell.KeyEsc:
-			if a.diffMode {
-				a.exitDiffMode()
-				return nil
-			}
-			a.app.Stop()
-			return nil
+		// MAIN KEYBINDINGS — lookup-based dispatch
+		// Normalize: for special keys (non-KeyRune), tcell may set a non-zero
+		// rune (e.g. Enter → rune(13)), but our compiled bindings store rune=0
+		// for special keys. Clear the rune so the lookup matches.
+		id := keyID{Key: event.Key(), Rune: event.Rune()}
+		if id.Key != tcell.KeyRune {
+			id.Rune = 0
 		}
+
+		// Context-specific bindings first (higher priority)
+		switch a.currentPanelIdx {
+		case 0:
+			if action, ok := a.bindings.BuilderByKey[id]; ok {
+				if result := a.dispatchBuilderAction(action); result == nil {
+					return nil
+				}
+			}
+		case 1:
+			if action, ok := a.bindings.VariantsByKey[id]; ok {
+				if result := a.dispatchVariantsAction(action); result == nil {
+					return nil
+				}
+			}
+		}
+
+		// General bindings
+		if action, ok := a.bindings.GeneralByKey[id]; ok {
+			return a.dispatchGeneralAction(action)
+		}
+
 		return event
 	})
+}
+
+// dispatchGeneralAction handles actions from the general keybinding group.
+// Returns nil to consume the event, or the original event to pass through.
+func (a *App) dispatchGeneralAction(action string) *tcell.EventKey {
+	switch action {
+	case "quit":
+		a.app.Stop()
+	case "help":
+		a.showHelp()
+	case "focus_builder":
+		a.focusPanel(0)
+	case "focus_variants":
+		a.focusPanel(1)
+	case "panel_next":
+		a.nextPanel()
+	case "panel_prev":
+		a.prevPanel()
+	case "panel_cycle_next":
+		a.nextPanel()
+	case "panel_cycle_prev":
+		a.prevPanel()
+	case "cursor_down":
+		a.cursorDown()
+	case "cursor_up":
+		a.cursorUp()
+	case "scroll_viewer_down":
+		a.scrollViewerDown()
+	case "scroll_viewer_up":
+		a.scrollViewerUp()
+	case "toggle_resolved":
+		a.resolvedMode = !a.resolvedMode
+		a.refreshCurrentViewer()
+	case "search":
+		if a.currentPanelIdx == 0 || a.currentPanelIdx == 1 {
+			a.enterSearchMode()
+		}
+	case "escape":
+		if a.diffMode {
+			a.exitDiffMode()
+		} else {
+			a.app.Stop()
+		}
+	default:
+		return &tcell.EventKey{}
+	}
+	return nil
+}
+
+// dispatchBuilderAction handles actions from the builder keybinding group.
+func (a *App) dispatchBuilderAction(action string) *tcell.EventKey {
+	switch action {
+	case "expand_collapse":
+		a.toggleExpand()
+	case "unassign":
+		a.unassignBuilderNode()
+	default:
+		return &tcell.EventKey{}
+	}
+	return nil
+}
+
+// dispatchVariantsAction handles actions from the variants keybinding group.
+// Most actions are skipped in diff mode.
+func (a *App) dispatchVariantsAction(action string) *tcell.EventKey {
+	if a.diffMode {
+		return &tcell.EventKey{}
+	}
+	switch action {
+	case "select":
+		a.selectVariant()
+	case "duplicate":
+		a.duplicateVariant()
+	case "rename":
+		a.renameVariant()
+	case "delete":
+		a.showDeleteConfirm()
+	case "edit":
+		a.editVariantInEditor()
+	case "diff":
+		a.enterDiffMode()
+	case "references":
+		a.showReferences()
+	default:
+		return &tcell.EventKey{}
+	}
+	return nil
 }
 
 func (a *App) focusPanel(idx int) {
@@ -739,9 +772,9 @@ func (a *App) updateBorderColors() {
 			continue
 		}
 		if i == a.currentPanelIdx {
-			list.SetBorderColor(tcell.ColorGreen)
+			list.SetBorderColor(a.theme.BorderFocused)
 		} else {
-			list.SetBorderColor(tcell.ColorDefault)
+			list.SetBorderColor(a.theme.BorderUnfocused)
 		}
 	}
 }
@@ -777,18 +810,7 @@ func (a *App) scrollViewerUp() {
 }
 
 func (a *App) updateStatusBar() {
-	switch a.currentPanelIdx {
-	case 0:
-		a.statusBarLeft.SetText(" Navigate: j/k | Expand: Enter | Unassign: d | Panels: h/l | Scroll: J/K | Resolve: v | Search: / | Help: ? | Quit: q")
-	case 1:
-		if a.diffMode {
-			a.statusBarLeft.SetText(" Navigate: j/k | Scroll: J/K | Resolve: v | Search: / | Exit diff: Esc | Help: ? | Quit: q")
-		} else {
-			a.statusBarLeft.SetText(" Navigate: j/k | Refs: Enter | Select: Space | Dup: d | Rename: r | Del: D | Edit: e | Resolve: v | Diff: w | Search: / | Help: ?")
-		}
-	default:
-		a.statusBarLeft.SetText(fmt.Sprintf(" Panel %d", a.currentPanelIdx))
-	}
+	a.statusBarLeft.SetText(generateStatusBarText(a.currentPanelIdx, a.diffMode, a.bindings))
 }
 
 func modal(content tview.Primitive, width, height int) tview.Primitive {
@@ -801,75 +823,16 @@ func modal(content tview.Primitive, width, height int) tview.Primitive {
 		AddItem(nil, 0, 1, false)
 }
 
-var panelHelpTexts = map[int]string{
-	0: `[yellow::b]Builder — Help[-:-:-]
-
-[green]Navigation:[-]
-  j / k         Move cursor up/down
-  Enter         Expand/collapse node
-  1             Jump to this panel
-  h / l         Switch panels
-  Tab / S-Tab   Cycle panels
-  /             Search/filter items
-
-[green]Actions:[-]
-  d             Unassign package
-
-[green]Viewer:[-]
-  J / K         Scroll viewer
-  v             Toggle resolved view
-
-[green]General:[-]
-  ?             This help
-  Esc           Close overlay
-  q             Quit
-
-[darkgray]Press Escape to close[-]`,
-
-	1: `[yellow::b]Variants — Help[-:-:-]
-
-[green]Navigation:[-]
-  j / k         Move cursor up/down
-  2             Jump to this panel
-  h / l         Switch panels
-  Tab / S-Tab   Cycle panels
-  /             Search/filter items
-
-[green]Actions:[-]
-  Space         Select this variant
-  d             Duplicate variant
-  r             Rename variant
-  D             Delete variant (confirm)
-  e             Edit in $EDITOR
-  v             Toggle resolved view
-  w             Diff from this variant
-  Enter         Show experiment references
-
-[green]Viewer:[-]
-  J / K         Scroll viewer
-
-[green]General:[-]
-  ?             This help
-  Esc           Exit diff / Close overlay
-  q             Quit
-
-[darkgray]Press Escape to close[-]`,
-}
-
-var panelHelpTitles = map[int]string{
-	0: " Builder Help ",
-	1: " Variants Help ",
-}
-
 func (a *App) showHelp() {
 	a.helpOpen = true
 
+	titles := map[int]string{0: " Builder Help ", 1: " Variants Help "}
 	helpView := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(panelHelpTexts[a.currentPanelIdx])
+		SetText(generateHelpText(a.currentPanelIdx, a.bindings))
 	helpView.SetBorder(true).
-		SetTitle(panelHelpTitles[a.currentPanelIdx]).
-		SetBorderColor(tcell.ColorGreen)
+		SetTitle(titles[a.currentPanelIdx]).
+		SetBorderColor(a.theme.ModalHelpBorder)
 
 	a.pages.AddPage("help", modal(helpView, 55, 22), true, true)
 	a.app.SetFocus(helpView)
@@ -911,7 +874,7 @@ func (a *App) showReferences() {
 		SetText(text)
 	refsView.SetBorder(true).
 		SetTitle(fmt.Sprintf(" References: %s ", variantName)).
-		SetBorderColor(tcell.ColorGreen)
+		SetBorderColor(a.theme.ModalRefsBorder)
 
 	w := len(variantName) + 18
 	for _, ref := range refs {
@@ -993,6 +956,11 @@ func (a *App) showDeleteConfirm() {
 	a.pendingDeleteIdx = idx
 	a.pendingConfirmAction = confirmDelete
 
+	if !a.cfg.Warnings.ShouldWarn(confirmDelete) {
+		a.executeDelete()
+		return
+	}
+
 	name := a.visibleVariantFiles[idx]
 
 	// Find all experiments referencing this variant (including current).
@@ -1004,7 +972,7 @@ func (a *App) showDeleteConfirm() {
 
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Delete ",
-		borderColor: tcell.ColorRed,
+		borderColor: a.theme.ModalDeleteBorder,
 		headerText:  fmt.Sprintf("\nDelete [yellow]%s.yaml[-]?\n", name),
 		footerText:  "\n[green](y/n)[-]",
 		refs:        refs,
@@ -1064,6 +1032,11 @@ func (a *App) unassignBuilderNode() {
 		return
 	}
 
+	if !a.cfg.Warnings.ShouldWarn(confirmUnassign) {
+		a.executeUnassign()
+		return
+	}
+
 	// Deep node: check who uses the containing file
 	allRefs, err := findFileReferences(a.confDir, node.SourceFilePath)
 	if err != nil {
@@ -1085,7 +1058,7 @@ func (a *App) unassignBuilderNode() {
 	a.pendingConfirmAction = confirmUnassign
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Unassign ",
-		borderColor: tcell.ColorYellow,
+		borderColor: a.theme.ModalWarningBorder,
 		headerText:  fmt.Sprintf("\nUnassigning [yellow]%s[-] also affects:\n", node.Key),
 		footerText:  "\nUnassign anyway? [green](y/n)[-]",
 		refs:        otherRefs,
@@ -1205,6 +1178,11 @@ func (a *App) renameVariant() {
 		return
 	}
 
+	if !a.cfg.Warnings.ShouldWarn(confirmRename) {
+		a.showRenameInput()
+		return
+	}
+
 	variantName := a.visibleVariantFiles[idx]
 	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
 	if err != nil {
@@ -1219,7 +1197,7 @@ func (a *App) renameVariant() {
 	a.pendingConfirmAction = confirmRename
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Rename ",
-		borderColor: tcell.ColorYellow,
+		borderColor: a.theme.ModalWarningBorder,
 		headerText:  fmt.Sprintf("\nRenaming [yellow]%s[-] will update references in:\n", variantName),
 		footerText:  "\nProceed? [green](y/n)[-]",
 		refs:        refs,
@@ -1251,7 +1229,7 @@ func (a *App) showRenameInput() {
 
 	inputField.SetBorder(true).
 		SetTitle(" Rename Variant ").
-		SetBorderColor(tcell.ColorGreen)
+		SetBorderColor(a.theme.ModalHelpBorder)
 
 	w := len(name) + 24
 	if w < 50 {
@@ -1338,6 +1316,11 @@ func (a *App) editVariantInEditor() {
 		return
 	}
 
+	if !a.cfg.Warnings.ShouldWarn(confirmEdit) {
+		a.executeEditVariant()
+		return
+	}
+
 	variantName := a.visibleVariantFiles[idx]
 	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
 	if err != nil {
@@ -1352,7 +1335,7 @@ func (a *App) editVariantInEditor() {
 	a.pendingConfirmAction = confirmEdit
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Edit ",
-		borderColor: tcell.ColorYellow,
+		borderColor: a.theme.ModalWarningBorder,
 		headerText:  fmt.Sprintf("\n[yellow]%s[-] is used by:\n", variantName),
 		footerText:  "\nEdit anyway? [green](y/n)[-]",
 		refs:        refs,
@@ -1369,7 +1352,7 @@ func (a *App) executeEditVariant() {
 	filePath := filepath.Join(a.variantDir, a.visibleVariantFiles[idx]+".yaml")
 	editor := os.Getenv("EDITOR")
 	if editor == "" {
-		editor = "vi"
+		editor = a.cfg.Editor
 	}
 
 	var editorErr error

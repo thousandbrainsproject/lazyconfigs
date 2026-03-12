@@ -46,7 +46,7 @@ func (a *App) exitSearchMode() {
 		a.visibleBuilderItems = a.flatItems
 		a.builderPanel.Clear()
 		for i, node := range a.flatItems {
-			a.builderPanel.AddItem(renderItem(node, i == 0), "", 0, nil)
+			a.builderPanel.AddItem(renderItem(node, i == 0, a.theme), "", 0, nil)
 		}
 		// Restore cursor to the previously selected item
 		if selectedNode != nil {
@@ -72,7 +72,7 @@ func (a *App) exitSearchMode() {
 		a.variantsPanel.Clear()
 		for i, name := range a.variantFiles {
 			isDiffFrom := a.diffMode && i == a.diffFromIdx
-			a.variantsPanel.AddItem(renderVariantItem(name, i == 0, name == activeValue, isDiffFrom), "", 0, nil)
+			a.variantsPanel.AddItem(renderVariantItem(name, i == 0, name == activeValue, isDiffFrom, a.theme), "", 0, nil)
 		}
 		// Restore cursor
 		if selectedName != "" {
@@ -118,7 +118,7 @@ func (a *App) applyBuilderSearch(query string) {
 
 	a.builderPanel.Clear()
 	for i, node := range a.visibleBuilderItems {
-		a.builderPanel.AddItem(renderItem(node, i == 0), "", 0, nil)
+		a.builderPanel.AddItem(renderItem(node, i == 0, a.theme), "", 0, nil)
 	}
 	if len(a.visibleBuilderItems) > 0 {
 		a.builderPanel.SetCurrentItem(0)
@@ -146,7 +146,7 @@ func (a *App) applyVariantsSearch(query string) {
 	a.variantsPanel.Clear()
 	for i, name := range a.visibleVariantFiles {
 		isDiffFrom := false // diff-from index doesn't map to filtered list
-		a.variantsPanel.AddItem(renderVariantItem(name, i == 0, name == activeValue, isDiffFrom), "", 0, nil)
+		a.variantsPanel.AddItem(renderVariantItem(name, i == 0, name == activeValue, isDiffFrom, a.theme), "", 0, nil)
 	}
 	if len(a.visibleVariantFiles) > 0 {
 		a.variantsPanel.SetCurrentItem(0)

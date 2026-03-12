@@ -13,14 +13,14 @@ import (
 )
 
 // highlightCode tokenizes code with chroma and converts to tview color tags.
-func highlightCode(code, language string) string {
+func highlightCode(code, language, syntaxStyle string) string {
 	lexer := lexers.Get(language)
 	if lexer == nil {
 		lexer = lexers.Fallback
 	}
 	lexer = chroma.Coalesce(lexer)
 
-	style := styles.Get("gruvbox")
+	style := styles.Get(syntaxStyle)
 
 	iterator, err := lexer.Tokenise(nil, code)
 	if err != nil {
@@ -62,11 +62,11 @@ func (a *App) updateViewer(node *TreeNode) {
 			if readErr != nil {
 				a.viewerPanel.SetText(fmt.Sprintf("[red]Resolution error: %s[-]\n[red]Also failed to read raw file: %s[-]", tview.Escape(err.Error()), tview.Escape(readErr.Error())))
 			} else {
-				rawHighlighted := highlightCode(string(data), "yaml")
+				rawHighlighted := highlightCode(string(data), "yaml", a.cfg.SyntaxStyle)
 				a.viewerPanel.SetText(fmt.Sprintf("[red]Resolution error: %s[-]\n\n%s", tview.Escape(err.Error()), rawHighlighted))
 			}
 		} else {
-			highlighted = highlightCode(resolved, "yaml")
+			highlighted = highlightCode(resolved, "yaml", a.cfg.SyntaxStyle)
 			a.viewerPanel.SetText(highlighted)
 		}
 	} else {
@@ -77,7 +77,7 @@ func (a *App) updateViewer(node *TreeNode) {
 			return
 		}
 		content = string(data)
-		highlighted = highlightCode(content, "yaml")
+		highlighted = highlightCode(content, "yaml", a.cfg.SyntaxStyle)
 		a.viewerPanel.SetText(highlighted)
 	}
 
@@ -128,7 +128,7 @@ func (a *App) updateViewerDiff(fromPath, toPath string) {
 			a.viewerPanel.SetText(fmt.Sprintf("[red]Diff error: %s[-]", tview.Escape(err.Error())))
 			return
 		}
-		a.viewerPanel.SetText(colorizeDiff(diff))
+		a.viewerPanel.SetText(colorizeDiff(diff, a.theme))
 	}
 	a.viewerPanel.ScrollToBeginning()
 
