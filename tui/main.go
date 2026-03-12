@@ -544,6 +544,10 @@ func (a *App) setupKeybindings() {
 					return nil
 				}
 			case 'd':
+				if a.currentPanelIdx == 0 {
+					a.unassignBuilderNode()
+					return nil
+				}
 				if a.currentPanelIdx == 1 && !a.diffMode {
 					a.duplicateVariant()
 					return nil
@@ -678,7 +682,7 @@ func (a *App) scrollViewerUp() {
 func (a *App) updateStatusBar() {
 	switch a.currentPanelIdx {
 	case 0:
-		a.statusBarLeft.SetText(" Navigate: j/k | Expand: Enter | Panels: h/l | Scroll: J/K | Resolve: v | Search: / | Help: ? | Quit: q")
+		a.statusBarLeft.SetText(" Navigate: j/k | Expand: Enter | Unassign: d | Panels: h/l | Scroll: J/K | Resolve: v | Search: / | Help: ? | Quit: q")
 	case 1:
 		if a.diffMode {
 			a.statusBarLeft.SetText(" Navigate: j/k | Scroll: J/K | Resolve: v | Search: / | Exit diff: Esc | Help: ? | Quit: q")
@@ -710,6 +714,9 @@ var panelHelpTexts = map[int]string{
   h / l         Switch panels
   Tab / S-Tab   Cycle panels
   /             Search/filter items
+
+[green]Actions:[-]
+  d             Unassign package
 
 [green]Viewer:[-]
   J / K         Scroll viewer
@@ -940,6 +947,29 @@ func (a *App) executeDelete() {
 	}
 
 	a.closeConfirm()
+	a.populateVariants(a.selectedBuilderNode)
+}
+
+// unassignBuilderNode sets the selected builder node's value to "??" in the
+// config file, effectively unassigning the package without deleting any files.
+func (a *App) unassignBuilderNode() {
+	if a.selectedBuilderNode == nil || a.selectedBuilderNode.Value == "??" {
+		return
+	}
+
+	if err := updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, "??"); err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
+		return
+	}
+
+	sourceFile := a.selectedBuilderNode.SourceFilePath
+	key := a.selectedBuilderNode.Key
+	a.refreshAll()
+	restoredIdx := a.findBuilderNodeIndex(sourceFile, key)
+	if restoredIdx >= 0 {
+		a.builderPanel.SetCurrentItem(restoredIdx)
+		a.selectedBuilderNode = a.flatItems[restoredIdx]
+	}
 	a.populateVariants(a.selectedBuilderNode)
 }
 
