@@ -4,7 +4,7 @@ BINARY_NAME=lazyconfigs
 INSTALL_PATH=$(HOME)/.local/bin
 
 build:
-	go build -o $(BINARY_NAME) .
+	go build -o $(BINARY_NAME) ./cmd/lazyconfigs
 
 install: build
 	mkdir -p $(INSTALL_PATH)

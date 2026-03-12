@@ -1,4 +1,4 @@
-package main
+package hydra
 
 import (
 	"os"
@@ -34,17 +34,17 @@ type TreeNode struct {
 	RawKey         string // original key as in YAML (e.g., "/monty", "config")
 }
 
-// packageDir returns the directory containing variant files for this node.
-func (node *TreeNode) packageDir(confDir string) string {
+// PackageDir returns the directory containing variant files for this node.
+func (node *TreeNode) PackageDir(confDir string) string {
 	if node.Absolute {
 		return filepath.Join(confDir, node.Key)
 	}
 	return filepath.Join(filepath.Dir(node.SourceFilePath), node.Key)
 }
 
-// listVariants reads directory and returns sorted .yaml filenames without extension,
+// ListVariants reads directory and returns sorted .yaml filenames without extension,
 // skipping subdirectories.
-func listVariants(dir string) ([]string, error) {
+func ListVariants(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
@@ -64,17 +64,17 @@ func listVariants(dir string) ([]string, error) {
 	return names, nil
 }
 
-// parseDefaults reads a YAML file and extracts its defaults: list.
-func parseDefaults(filePath string) ([]DefaultEntry, error) {
+// ParseDefaults reads a YAML file and extracts its defaults: list.
+func ParseDefaults(filePath string) ([]DefaultEntry, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	return parseDefaultsFromData(data)
+	return ParseDefaultsFromData(data)
 }
 
-// parseDefaultsFromData extracts defaults entries from already-loaded YAML data.
-func parseDefaultsFromData(data []byte) ([]DefaultEntry, error) {
+// ParseDefaultsFromData extracts defaults entries from already-loaded YAML data.
+func ParseDefaultsFromData(data []byte) ([]DefaultEntry, error) {
 	var raw map[string]interface{}
 	if err := yaml.Unmarshal(data, &raw); err != nil {
 		return nil, err
@@ -133,10 +133,10 @@ func parseDefaultsFromData(data []byte) ([]DefaultEntry, error) {
 	return entries, nil
 }
 
-// resolveFilePath resolves a DefaultEntry to an absolute file path.
+// ResolveFilePath resolves a DefaultEntry to an absolute file path.
 // For absolute entries, the path is relative to confDir.
 // For relative entries, the path is relative to the parent file's directory.
-func resolveFilePath(entry DefaultEntry, parentFilePath, confDir string) string {
+func ResolveFilePath(entry DefaultEntry, parentFilePath, confDir string) string {
 	key := entry.Key
 	value := entry.Value
 
@@ -157,8 +157,8 @@ func resolveFilePath(entry DefaultEntry, parentFilePath, confDir string) string 
 	return filepath.Join(parentDir, relPath)
 }
 
-// buildTree recursively builds a tree of TreeNodes starting from a YAML file.
-func buildTree(filePath, confDir string) ([]*TreeNode, error) {
+// BuildTree recursively builds a tree of TreeNodes starting from a YAML file.
+func BuildTree(filePath, confDir string) ([]*TreeNode, error) {
 	visited := make(map[string]bool)
 	return buildTreeRecursive(filePath, confDir, 0, nil, visited)
 }
@@ -169,14 +169,14 @@ func buildTreeRecursive(filePath, confDir string, depth int, parent *TreeNode, v
 		absPath = filePath
 	}
 
-	entries, err := parseDefaults(absPath)
+	entries, err := ParseDefaults(absPath)
 	if err != nil {
 		return nil, err
 	}
 
 	var nodes []*TreeNode
 	for _, entry := range entries {
-		childPath := resolveFilePath(entry, absPath, confDir)
+		childPath := ResolveFilePath(entry, absPath, confDir)
 		childAbs, err := filepath.Abs(childPath)
 		if err != nil {
 			childAbs = childPath
@@ -228,9 +228,9 @@ func buildTreeRecursive(filePath, confDir string, depth int, parent *TreeNode, v
 	return nodes, nil
 }
 
-// findFileReferences scans experiment files and returns names of experiments
+// FindFileReferences scans experiment files and returns names of experiments
 // whose resolved config tree contains a node resolving to targetFilePath.
-func findFileReferences(confDir, targetFilePath string) ([]string, error) {
+func FindFileReferences(confDir, targetFilePath string) ([]string, error) {
 	expDir := filepath.Join(confDir, "experiment")
 	var refs []string
 
@@ -238,7 +238,7 @@ func findFileReferences(confDir, targetFilePath string) ([]string, error) {
 		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
 			return nil
 		}
-		tree, err := buildTree(path, confDir)
+		tree, err := BuildTree(path, confDir)
 		if err != nil {
 			return nil // skip unparseable files
 		}
@@ -259,15 +259,15 @@ func findFileReferences(confDir, targetFilePath string) ([]string, error) {
 	return refs, nil
 }
 
-// findVariantReferences scans experiment files and returns names of experiments
+// FindVariantReferences scans experiment files and returns names of experiments
 // that reference the given variant at any level of the resolved config hierarchy.
-func findVariantReferences(confDir, variantDir, variantName string) ([]string, error) {
+func FindVariantReferences(confDir, variantDir, variantName string) ([]string, error) {
 	targetFile := filepath.Join(variantDir, variantName+".yaml")
 	targetAbs, err := filepath.Abs(targetFile)
 	if err != nil {
 		return nil, err
 	}
-	return findFileReferences(confDir, targetAbs)
+	return FindFileReferences(confDir, targetAbs)
 }
 
 // VariantRef tracks a detailed reference to a variant within an experiment's config tree.
@@ -294,9 +294,9 @@ func findRefsInTree(nodes []*TreeNode, targetPath, expName string) []VariantRef 
 	return refs
 }
 
-// findVariantReferencesDetailed scans experiment files and returns detailed
+// FindVariantReferencesDetailed scans experiment files and returns detailed
 // reference information for every location that references the given variant.
-func findVariantReferencesDetailed(confDir, variantDir, variantName string) ([]VariantRef, error) {
+func FindVariantReferencesDetailed(confDir, variantDir, variantName string) ([]VariantRef, error) {
 	targetFile := filepath.Join(variantDir, variantName+".yaml")
 	targetAbs, err := filepath.Abs(targetFile)
 	if err != nil {
@@ -310,7 +310,7 @@ func findVariantReferencesDetailed(confDir, variantDir, variantName string) ([]V
 		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".yaml") {
 			return nil
 		}
-		tree, err := buildTree(path, confDir)
+		tree, err := BuildTree(path, confDir)
 		if err != nil {
 			return nil
 		}

@@ -1,4 +1,4 @@
-package main
+package hydra
 
 import (
 	"fmt"
@@ -8,10 +8,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// updateDefaultValue modifies a defaults: entry in a YAML file, preserving
+// UpdateDefaultValue modifies a defaults: entry in a YAML file, preserving
 // comments and structure by doing a surgical byte-level replacement.
 // rawKey must match exactly what's in the YAML (e.g., "/monty", "config").
-func updateDefaultValue(filePath, rawKey, newValue string) error {
+func UpdateDefaultValue(filePath, rawKey, newValue string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return err

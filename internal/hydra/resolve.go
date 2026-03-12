@@ -1,4 +1,4 @@
-package main
+package hydra
 
 import (
 	"fmt"
@@ -130,7 +130,7 @@ func resolveFileRecursive(filePath, confDir string, visited map[string]bool) (ma
 	}
 
 	// Extract and remove defaults (reuse already-loaded data)
-	entries, err := parseDefaultsFromData(data)
+	entries, err := ParseDefaultsFromData(data)
 	if err != nil {
 		return nil, "", fmt.Errorf("parsing defaults in %s: %w", filePath, err)
 	}
@@ -143,7 +143,7 @@ func resolveFileRecursive(filePath, confDir string, visited map[string]bool) (ma
 			continue
 		}
 
-		childPath := resolveFilePath(entry, filePath, confDir)
+		childPath := ResolveFilePath(entry, filePath, confDir)
 		childPath, _ = filepath.Abs(childPath)
 
 		if visited[childPath] {
@@ -179,9 +179,9 @@ func resolveFileRecursive(filePath, confDir string, visited map[string]bool) (ma
 	return deepMerge(accumulated, raw), myPkg, nil
 }
 
-// resolveFile is the public entry point. It resolves a Hydra config file and
+// ResolveFile is the public entry point. It resolves a Hydra config file and
 // returns the result as a YAML string.
-func resolveFile(filePath, confDir string) (string, error) {
+func ResolveFile(filePath, confDir string) (string, error) {
 	absPath, err := filepath.Abs(filePath)
 	if err != nil {
 		return "", fmt.Errorf("resolving path %s: %w", filePath, err)

@@ -1,6 +1,6 @@
 // ABOUTME: File-based configuration system for the lazyconfigs TUI.
 // ABOUTME: Loads config from $HOME/.config/lazyconfigs/config.yaml with sensible defaults.
-package main
+package config
 
 import (
 	"fmt"
@@ -11,6 +11,17 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"gopkg.in/yaml.v3"
+)
+
+// ConfirmAction represents a user action that may require confirmation.
+type ConfirmAction int
+
+const (
+	ConfirmDelete   ConfirmAction = iota
+	ConfirmReassign
+	ConfirmEdit
+	ConfirmRename
+	ConfirmUnassign
 )
 
 // Config is the top-level configuration loaded from config.yaml.
@@ -34,18 +45,18 @@ type WarningConfig struct {
 }
 
 // ShouldWarn returns whether a confirmation modal should be shown for the given action.
-func (w WarningConfig) ShouldWarn(action confirmAction) bool {
+func (w WarningConfig) ShouldWarn(action ConfirmAction) bool {
 	var ptr *bool
 	switch action {
-	case confirmDelete:
+	case ConfirmDelete:
 		ptr = w.Delete
-	case confirmRename:
+	case ConfirmRename:
 		ptr = w.Rename
-	case confirmReassign:
+	case ConfirmReassign:
 		ptr = w.Reassign
-	case confirmUnassign:
+	case ConfirmUnassign:
 		ptr = w.Unassign
-	case confirmEdit:
+	case ConfirmEdit:
 		ptr = w.Edit
 	}
 	if ptr == nil {
@@ -126,21 +137,21 @@ func defaultConfig() Config {
 		},
 		Keybindings: KeybindingsConfig{
 			General: map[string]string{
-				"quit":             "q",
-				"help":             "?",
-				"focus_builder":    "1",
-				"focus_variants":   "2",
-				"panel_next":       "l",
-				"panel_prev":       "h",
-				"panel_cycle_next": "Tab",
-				"panel_cycle_prev": "Shift-Tab",
-				"cursor_down":      "j",
-				"cursor_up":        "k",
+				"quit":               "q",
+				"help":               "?",
+				"focus_builder":      "1",
+				"focus_variants":     "2",
+				"panel_next":         "l",
+				"panel_prev":         "h",
+				"panel_cycle_next":   "Tab",
+				"panel_cycle_prev":   "Shift-Tab",
+				"cursor_down":        "j",
+				"cursor_up":          "k",
 				"scroll_viewer_down": "J",
 				"scroll_viewer_up":   "K",
-				"toggle_resolved": "v",
-				"search":          "/",
-				"escape":          "Esc",
+				"toggle_resolved":   "v",
+				"search":            "/",
+				"escape":            "Esc",
 			},
 			Builder: map[string]string{
 				"expand_collapse": "Enter",
@@ -159,9 +170,9 @@ func defaultConfig() Config {
 	}
 }
 
-// loadConfig reads config from $HOME/.config/lazyconfigs/config.yaml.
+// LoadConfig reads config from $HOME/.config/lazyconfigs/config.yaml.
 // Missing file returns defaults. Parse errors warn to stderr and return defaults.
-func loadConfig() Config {
+func LoadConfig() Config {
 	cfg := defaultConfig()
 
 	home, err := os.UserHomeDir()
@@ -186,9 +197,9 @@ func loadConfig() Config {
 	return cfg
 }
 
-// findGitRoot walks up from cwd looking for a .git directory.
+// FindGitRoot walks up from cwd looking for a .git directory.
 // Returns the default conf path under the git root, or an error if not found.
-func findGitRoot() (string, error) {
+func FindGitRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("getting working directory: %w", err)
@@ -214,8 +225,8 @@ func parseColor(s string) tcell.Color {
 	return tcell.GetColor(s)
 }
 
-// compileTheme converts a ColorConfig into compiled ThemeColors.
-func compileTheme(cc ColorConfig) ThemeColors {
+// CompileTheme converts a ColorConfig into compiled ThemeColors.
+func CompileTheme(cc ColorConfig) ThemeColors {
 	return ThemeColors{
 		BorderFocused:      parseColor(cc.BorderFocused),
 		BorderUnfocused:    parseColor(cc.BorderUnfocused),
@@ -236,8 +247,8 @@ func compileTheme(cc ColorConfig) ThemeColors {
 	}
 }
 
-// keyID uniquely identifies a key event by its tcell key code and rune.
-type keyID struct {
+// KeyID identifies a key event for binding lookups.
+type KeyID struct {
 	Key  tcell.Key
 	Rune rune
 }
@@ -254,9 +265,9 @@ type CompiledBindings struct {
 	General      map[string]KeyBinding
 	Builder      map[string]KeyBinding
 	Variants     map[string]KeyBinding
-	GeneralByKey  map[keyID]string
-	BuilderByKey  map[keyID]string
-	VariantsByKey map[keyID]string
+	GeneralByKey  map[KeyID]string
+	BuilderByKey  map[KeyID]string
+	VariantsByKey map[KeyID]string
 }
 
 // parseKeyDescriptor converts a key descriptor string into a tcell key and rune.
@@ -301,15 +312,15 @@ func parseKeyDescriptor(s string) (tcell.Key, rune, error) {
 	return 0, 0, fmt.Errorf("unknown key descriptor: %q", s)
 }
 
-// compileBindings parses all keybinding config strings into compiled lookup maps.
-func compileBindings(kc KeybindingsConfig) CompiledBindings {
+// CompileBindings parses all keybinding config strings into compiled lookup maps.
+func CompileBindings(kc KeybindingsConfig) CompiledBindings {
 	cb := CompiledBindings{
 		General:       make(map[string]KeyBinding),
 		Builder:       make(map[string]KeyBinding),
 		Variants:      make(map[string]KeyBinding),
-		GeneralByKey:  make(map[keyID]string),
-		BuilderByKey:  make(map[keyID]string),
-		VariantsByKey: make(map[keyID]string),
+		GeneralByKey:  make(map[KeyID]string),
+		BuilderByKey:  make(map[KeyID]string),
+		VariantsByKey: make(map[KeyID]string),
 	}
 
 	compileGroup(kc.General, cb.General, cb.GeneralByKey)
@@ -446,8 +457,8 @@ func lookupKeyName(action, group string, b CompiledBindings) string {
 	return "?"
 }
 
-// generateHelpText builds the help modal text for the given panel from compiled bindings.
-func generateHelpText(panelIdx int, bindings CompiledBindings) string {
+// GenerateHelpText builds the help modal text for the given panel from compiled bindings.
+func GenerateHelpText(panelIdx int, bindings CompiledBindings) string {
 	var sections []helpSection
 	var title string
 	switch panelIdx {
@@ -483,8 +494,8 @@ func generateHelpText(panelIdx int, bindings CompiledBindings) string {
 	return sb.String()
 }
 
-// generateStatusBarText builds the status bar text for the given panel from compiled bindings.
-func generateStatusBarText(panelIdx int, diffMode bool, bindings CompiledBindings) string {
+// GenerateStatusBarText builds the status bar text for the given panel from compiled bindings.
+func GenerateStatusBarText(panelIdx int, diffMode bool, bindings CompiledBindings) string {
 	var entries []statusEntry
 	switch panelIdx {
 	case 0:
@@ -515,7 +526,7 @@ func generateStatusBarText(panelIdx int, diffMode bool, bindings CompiledBinding
 	return " " + strings.Join(parts, " | ")
 }
 
-func compileGroup(descriptors map[string]string, forward map[string]KeyBinding, reverse map[keyID]string) {
+func compileGroup(descriptors map[string]string, forward map[string]KeyBinding, reverse map[KeyID]string) {
 	for action, desc := range descriptors {
 		key, r, err := parseKeyDescriptor(desc)
 		if err != nil {
@@ -526,7 +537,7 @@ func compileGroup(descriptors map[string]string, forward map[string]KeyBinding, 
 		binding := KeyBinding{Key: key, Rune: r, Name: desc}
 		forward[action] = binding
 
-		id := keyID{Key: key, Rune: r}
+		id := KeyID{Key: key, Rune: r}
 		if existing, ok := reverse[id]; ok {
 			fmt.Fprintf(os.Stderr, "warning: duplicate key %q: action %q overrides %q\n", desc, action, existing)
 		}

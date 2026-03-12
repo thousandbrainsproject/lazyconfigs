@@ -1,4 +1,4 @@
-module lazyconfigs/tui
+module lazyconfigs
 
 go 1.22
 

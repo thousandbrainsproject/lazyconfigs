@@ -1,72 +1,39 @@
-package main
+// ABOUTME: Viewer panel rendering for file preview and diff display.
+// ABOUTME: Handles syntax highlighting, resolved mode, and diff generation.
+package app
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/alecthomas/chroma/v2"
-	"github.com/alecthomas/chroma/v2/lexers"
-	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/rivo/tview"
+
+	"lazyconfigs/internal/hydra"
+	"lazyconfigs/internal/ui"
 )
-
-// highlightCode tokenizes code with chroma and converts to tview color tags.
-func highlightCode(code, language, syntaxStyle string) string {
-	lexer := lexers.Get(language)
-	if lexer == nil {
-		lexer = lexers.Fallback
-	}
-	lexer = chroma.Coalesce(lexer)
-
-	style := styles.Get(syntaxStyle)
-
-	iterator, err := lexer.Tokenise(nil, code)
-	if err != nil {
-		return tview.Escape(code)
-	}
-
-	var buf strings.Builder
-	for _, token := range iterator.Tokens() {
-		text := tview.Escape(token.Value)
-		entry := style.Get(token.Type)
-		if entry.Colour.IsSet() {
-			hex := fmt.Sprintf("#%02x%02x%02x", entry.Colour.Red(), entry.Colour.Green(), entry.Colour.Blue())
-			buf.WriteString("[" + hex + "]")
-			buf.WriteString(text)
-			buf.WriteString("[-]")
-		} else {
-			buf.WriteString(text)
-		}
-	}
-	return buf.String()
-}
 
 // updateViewer reads the file for the given node and displays syntax-highlighted
 // content in the viewer panel.
-func (a *App) updateViewer(node *TreeNode) {
+func (a *App) updateViewer(node *hydra.TreeNode) {
 	if node == nil || node.FilePath == "" {
 		a.viewerPanel.SetText("[darkgray]No file to display[-]")
 		return
 	}
 
-	var content string
-	var highlighted string
-
 	if a.resolvedMode {
-		resolved, err := resolveFile(node.FilePath, a.confDir)
+		resolved, err := hydra.ResolveFile(node.FilePath, a.confDir)
 		if err != nil {
 			// Fall back to raw with error banner
 			data, readErr := os.ReadFile(node.FilePath)
 			if readErr != nil {
 				a.viewerPanel.SetText(fmt.Sprintf("[red]Resolution error: %s[-]\n[red]Also failed to read raw file: %s[-]", tview.Escape(err.Error()), tview.Escape(readErr.Error())))
 			} else {
-				rawHighlighted := highlightCode(string(data), "yaml", a.cfg.SyntaxStyle)
+				rawHighlighted := ui.HighlightCode(string(data), "yaml", a.cfg.SyntaxStyle)
 				a.viewerPanel.SetText(fmt.Sprintf("[red]Resolution error: %s[-]\n\n%s", tview.Escape(err.Error()), rawHighlighted))
 			}
 		} else {
-			highlighted = highlightCode(resolved, "yaml", a.cfg.SyntaxStyle)
+			highlighted := ui.HighlightCode(resolved, "yaml", a.cfg.SyntaxStyle)
 			a.viewerPanel.SetText(highlighted)
 		}
 	} else {
@@ -76,8 +43,8 @@ func (a *App) updateViewer(node *TreeNode) {
 			a.viewerPanel.SetTitle(" Viewer ")
 			return
 		}
-		content = string(data)
-		highlighted = highlightCode(content, "yaml", a.cfg.SyntaxStyle)
+		content := string(data)
+		highlighted := ui.HighlightCode(content, "yaml", a.cfg.SyntaxStyle)
 		a.viewerPanel.SetText(highlighted)
 	}
 
@@ -100,7 +67,7 @@ func (a *App) updateViewer(node *TreeNode) {
 func (a *App) updateViewerDiff(fromPath, toPath string) {
 	readContent := func(path string) (string, error) {
 		if a.resolvedMode {
-			return resolveFile(path, a.confDir)
+			return hydra.ResolveFile(path, a.confDir)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -123,12 +90,12 @@ func (a *App) updateViewerDiff(fromPath, toPath string) {
 	if fromContent == toContent {
 		a.viewerPanel.SetText("[darkgray]Files are identical[-]")
 	} else {
-		diff, err := generateDiff(fromContent, toContent, filepath.Base(fromPath), filepath.Base(toPath))
+		diff, err := ui.GenerateDiff(fromContent, toContent, filepath.Base(fromPath), filepath.Base(toPath))
 		if err != nil {
 			a.viewerPanel.SetText(fmt.Sprintf("[red]Diff error: %s[-]", tview.Escape(err.Error())))
 			return
 		}
-		a.viewerPanel.SetText(colorizeDiff(diff, a.theme))
+		a.viewerPanel.SetText(ui.ColorizeDiff(diff, a.theme))
 	}
 	a.viewerPanel.ScrollToBeginning()
 

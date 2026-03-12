@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"fmt"
@@ -6,9 +6,11 @@ import (
 
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/rivo/tview"
+
+	"lazyconfigs/internal/config"
 )
 
-func generateDiff(fromContent, toContent, fromLabel, toLabel string) (string, error) {
+func GenerateDiff(fromContent, toContent, fromLabel, toLabel string) (string, error) {
 	diff := difflib.UnifiedDiff{
 		A:        difflib.SplitLines(fromContent),
 		B:        difflib.SplitLines(toContent),
@@ -19,7 +21,7 @@ func generateDiff(fromContent, toContent, fromLabel, toLabel string) (string, er
 	return difflib.GetUnifiedDiffString(diff)
 }
 
-func colorizeDiff(diffText string, theme ThemeColors) string {
+func ColorizeDiff(diffText string, theme config.ThemeColors) string {
 	lines := strings.Split(diffText, "\n")
 	// strings.Split produces a trailing empty element when input ends with "\n"
 	if len(lines) > 0 && lines[len(lines)-1] == "" {

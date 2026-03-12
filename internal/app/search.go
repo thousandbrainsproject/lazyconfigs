@@ -1,10 +1,16 @@
-package main
+// ABOUTME: Fuzzy search functionality for builder and variant panels.
+// ABOUTME: Filters items in real-time as the user types a search query.
+package app
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/rivo/tview"
+
+	"lazyconfigs/internal/hydra"
+	"lazyconfigs/internal/ui"
+	"lazyconfigs/internal/version"
 )
 
 // fuzzyMatch returns true if all characters in query appear in target
@@ -37,7 +43,7 @@ func (a *App) exitSearchMode() {
 	// so we can restore cursor position in the full list.
 	switch a.searchPanel {
 	case 0:
-		var selectedNode *TreeNode
+		var selectedNode *hydra.TreeNode
 		idx := a.builderPanel.GetCurrentItem()
 		if idx >= 0 && idx < len(a.visibleBuilderItems) {
 			selectedNode = a.visibleBuilderItems[idx]
@@ -46,7 +52,7 @@ func (a *App) exitSearchMode() {
 		a.visibleBuilderItems = a.flatItems
 		a.builderPanel.Clear()
 		for i, node := range a.flatItems {
-			a.builderPanel.AddItem(renderItem(node, i == 0, a.theme), "", 0, nil)
+			a.builderPanel.AddItem(ui.RenderItem(node, i == 0, a.theme), "", 0, nil)
 		}
 		// Restore cursor to the previously selected item
 		if selectedNode != nil {
@@ -72,7 +78,7 @@ func (a *App) exitSearchMode() {
 		a.variantsPanel.Clear()
 		for i, name := range a.variantFiles {
 			isDiffFrom := a.diffMode && i == a.diffFromIdx
-			a.variantsPanel.AddItem(renderVariantItem(name, i == 0, name == activeValue, isDiffFrom, a.theme), "", 0, nil)
+			a.variantsPanel.AddItem(ui.RenderVariantItem(name, i == 0, name == activeValue, isDiffFrom, a.theme), "", 0, nil)
 		}
 		// Restore cursor
 		if selectedName != "" {
@@ -87,7 +93,7 @@ func (a *App) exitSearchMode() {
 
 	a.searchQuery = ""
 	a.updateStatusBar()
-	a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + Version + " ")
+	a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + version.Version + " ")
 }
 
 // applySearch dispatches filtering to the correct panel.
@@ -106,7 +112,7 @@ func (a *App) applyBuilderSearch(query string) {
 	if query == "" {
 		a.visibleBuilderItems = a.flatItems
 	} else {
-		var filtered []*TreeNode
+		var filtered []*hydra.TreeNode
 		for _, node := range a.flatItems {
 			target := node.Key + ": " + node.Value
 			if fuzzyMatch(query, target) {
@@ -118,7 +124,7 @@ func (a *App) applyBuilderSearch(query string) {
 
 	a.builderPanel.Clear()
 	for i, node := range a.visibleBuilderItems {
-		a.builderPanel.AddItem(renderItem(node, i == 0, a.theme), "", 0, nil)
+		a.builderPanel.AddItem(ui.RenderItem(node, i == 0, a.theme), "", 0, nil)
 	}
 	if len(a.visibleBuilderItems) > 0 {
 		a.builderPanel.SetCurrentItem(0)
@@ -146,7 +152,7 @@ func (a *App) applyVariantsSearch(query string) {
 	a.variantsPanel.Clear()
 	for i, name := range a.visibleVariantFiles {
 		isDiffFrom := false // diff-from index doesn't map to filtered list
-		a.variantsPanel.AddItem(renderVariantItem(name, i == 0, name == activeValue, isDiffFrom, a.theme), "", 0, nil)
+		a.variantsPanel.AddItem(ui.RenderVariantItem(name, i == 0, name == activeValue, isDiffFrom, a.theme), "", 0, nil)
 	}
 	if len(a.visibleVariantFiles) > 0 {
 		a.variantsPanel.SetCurrentItem(0)

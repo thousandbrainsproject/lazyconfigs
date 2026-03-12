@@ -1,4 +1,6 @@
-package main
+// ABOUTME: Main application struct and logic for the lazyconfigs TUI.
+// ABOUTME: Orchestrates panels, keybindings, modals, and variant operations.
+package app
 
 import (
 	"fmt"
@@ -9,27 +11,23 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
+
+	"lazyconfigs/internal/config"
+	"lazyconfigs/internal/hydra"
+	"lazyconfigs/internal/ui"
+	"lazyconfigs/internal/version"
 )
 
-type confirmAction int
-
-const (
-	confirmDelete   confirmAction = iota
-	confirmReassign
-	confirmEdit
-	confirmRename
-	confirmUnassign
-)
-
+// App holds all state for the lazyconfigs TUI application.
 type App struct {
 	app             *tview.Application
 	pages           *tview.Pages
 	panels          []tview.Primitive // Only [builderPanel, variantsPanel]
 	currentPanelIdx int
 
-	cfg      Config
-	theme    ThemeColors
-	bindings CompiledBindings
+	cfg      config.Config
+	theme    config.ThemeColors
+	bindings config.CompiledBindings
 
 	builderPanel   *tview.List
 	variantsPanel  *tview.List
@@ -37,14 +35,14 @@ type App struct {
 	statusBarLeft  *tview.TextView
 	statusBarRight *tview.TextView
 
-	rootNodes    []*TreeNode
-	flatItems    []*TreeNode
-	confDir      string
+	rootNodes []*hydra.TreeNode
+	flatItems []*hydra.TreeNode
+	confDir   string
 
-	visibleBuilderItems []*TreeNode
+	visibleBuilderItems []*hydra.TreeNode
 	visibleVariantFiles []string
 
-	selectedBuilderNode *TreeNode
+	selectedBuilderNode *hydra.TreeNode
 	variantFiles        []string
 	variantDir          string
 
@@ -59,7 +57,7 @@ type App struct {
 	refsOpen             bool
 	renameOpen           bool
 	pendingDeleteIdx     int
-	pendingConfirmAction confirmAction
+	pendingConfirmAction config.ConfirmAction
 	pendingReassignValue string
 
 	expPath string
@@ -69,7 +67,8 @@ type App struct {
 	searchPanel int
 }
 
-func newApp() *App {
+// New creates and initializes a new App instance.
+func New() *App {
 	tview.Borders.TopLeft = '╭'
 	tview.Borders.TopRight = '╮'
 	tview.Borders.BottomLeft = '╰'
@@ -80,16 +79,16 @@ func newApp() *App {
 		SetHighlightFullLine(true).
 		SetSelectedBackgroundColor(tcell.ColorDefault).
 		SetSelectedTextColor(tcell.ColorDefault)
-	cfg := loadConfig()
-	theme := compileTheme(cfg.Colors)
-	bindings := compileBindings(cfg.Keybindings)
+	cfg := config.LoadConfig()
+	theme := config.CompileTheme(cfg.Colors)
+	bindings := config.CompileBindings(cfg.Keybindings)
 
 	var confDir string
 	if cfg.ConfDir != "" {
 		confDir = cfg.ConfDir
 	} else {
 		var err error
-		confDir, err = findGitRoot()
+		confDir, err = config.FindGitRoot()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %v, falling back to current directory\n", err)
 			confDir, _ = os.Getwd()
@@ -127,7 +126,7 @@ func newApp() *App {
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignRight)
 	statusBarRight.SetBorder(false)
-	statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + Version + " ")
+	statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + version.Version + " ")
 
 	a := &App{
 		app:            tview.NewApplication(),
@@ -163,7 +162,7 @@ func newApp() *App {
 				a.updateViewerDiff(a.diffFromFile, currentPath)
 			} else if index >= 0 && index < len(a.visibleVariantFiles) {
 				variantPath := filepath.Join(a.variantDir, a.visibleVariantFiles[index]+".yaml")
-				a.updateViewer(&TreeNode{FilePath: variantPath})
+				a.updateViewer(&hydra.TreeNode{FilePath: variantPath})
 			}
 		}
 	})
@@ -204,9 +203,15 @@ func newApp() *App {
 	return a
 }
 
+// Run starts the tview application event loop.
+func (a *App) Run() error {
+	a.app.SetRoot(a.pages, true).EnableMouse(false)
+	return a.app.Run()
+}
+
 func (a *App) refreshAll() {
 	// Save expanded state before rebuilding
-	expanded := collectExpanded(a.rootNodes)
+	expanded := hydra.CollectExpanded(a.rootNodes)
 
 	// Load tree from root config
 	expPath := filepath.Join(a.confDir, "experiment.yaml")
@@ -214,12 +219,12 @@ func (a *App) refreshAll() {
 	if err == nil {
 		a.expPath = absExpPath
 	}
-	roots, err := buildTree(expPath, a.confDir)
+	roots, err := hydra.BuildTree(expPath, a.confDir)
 	if err != nil {
 		a.builderPanel.Clear()
 		a.builderPanel.AddItem(fmt.Sprintf("[red]Error: %s[-]", err.Error()), "", 0, nil)
 	} else {
-		restoreExpanded(roots, expanded)
+		hydra.RestoreExpanded(roots, expanded)
 		a.rootNodes = roots
 		a.rebuildBuilderList()
 	}
@@ -242,14 +247,14 @@ func (a *App) refreshAll() {
 
 func (a *App) rebuildBuilderList() {
 	currentIdx := a.builderPanel.GetCurrentItem()
-	a.flatItems = flattenTree(a.rootNodes)
+	a.flatItems = hydra.FlattenTree(a.rootNodes)
 	// Update visibleBuilderItems before modifying the panel so that
 	// SetChangedFunc callbacks (triggered by AddItem/SetCurrentItem)
 	// see the correct item list rather than stale data.
 	a.visibleBuilderItems = a.flatItems
 	a.builderPanel.Clear()
 	for i, node := range a.flatItems {
-		a.builderPanel.AddItem(renderItem(node, i == currentIdx, a.theme), "", 0, nil)
+		a.builderPanel.AddItem(ui.RenderItem(node, i == currentIdx, a.theme), "", 0, nil)
 	}
 	if currentIdx >= len(a.flatItems) {
 		currentIdx = len(a.flatItems) - 1
@@ -266,7 +271,7 @@ func (a *App) refreshBuilderSelection(selectedIdx int) {
 		if i >= count {
 			break
 		}
-		a.builderPanel.SetItemText(i, renderItem(node, i == selectedIdx, a.theme), "")
+		a.builderPanel.SetItemText(i, ui.RenderItem(node, i == selectedIdx, a.theme), "")
 	}
 }
 
@@ -281,20 +286,20 @@ func (a *App) refreshVariantsSelection(selectedIdx int) {
 			break
 		}
 		isDiffFrom := a.diffMode && i == a.diffFromIdx
-		a.variantsPanel.SetItemText(i, renderVariantItem(name, i == selectedIdx, name == activeValue, isDiffFrom, a.theme), "")
+		a.variantsPanel.SetItemText(i, ui.RenderVariantItem(name, i == selectedIdx, name == activeValue, isDiffFrom, a.theme), "")
 	}
 }
 
 // populateVariants reads variant files from the node's package directory
 // and populates the variants panel.
-func (a *App) populateVariants(node *TreeNode) {
+func (a *App) populateVariants(node *hydra.TreeNode) {
 	// Exit search if active on the variants panel — the variant list is about
 	// to be replaced, so filtered state would become stale.
 	if a.searchMode && a.searchPanel == 1 {
 		a.searchMode = false
 		a.searchQuery = ""
 		a.updateStatusBar()
-		a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + Version + " ")
+		a.statusBarRight.SetText("[blue::b]Thousand Brains Project[-:-:-] " + version.Version + " ")
 	}
 
 	// Reset diff state — the variant list is about to change, so diffFromIdx
@@ -316,8 +321,8 @@ func (a *App) populateVariants(node *TreeNode) {
 		return
 	}
 
-	dir := node.packageDir(a.confDir)
-	variants, err := listVariants(dir)
+	dir := node.PackageDir(a.confDir)
+	variants, err := hydra.ListVariants(dir)
 	if err != nil {
 		a.variantsPanel.AddItem(fmt.Sprintf("[red]Error: %s[-]", err.Error()), "", 0, nil)
 		return
@@ -339,7 +344,7 @@ func (a *App) populateVariants(node *TreeNode) {
 	}
 	for i, name := range variants {
 		isActive := name == node.Value
-		a.variantsPanel.AddItem(renderVariantItem(name, i == cursorIdx, isActive, false, a.theme), "", 0, nil)
+		a.variantsPanel.AddItem(ui.RenderVariantItem(name, i == cursorIdx, isActive, false, a.theme), "", 0, nil)
 	}
 
 	// Auto-scroll to active variant
@@ -350,8 +355,7 @@ func (a *App) populateVariants(node *TreeNode) {
 }
 
 // selectVariant selects the highlighted variant, updates the YAML config file,
-// and refreshes the tree. For nodes deeper than the experiment level (shared
-// configs), a confirmation modal is shown if other experiments are affected.
+// and refreshes the tree.
 func (a *App) selectVariant() {
 	idx := a.variantsPanel.GetCurrentItem()
 	if idx < 0 || idx >= len(a.visibleVariantFiles) || a.selectedBuilderNode == nil {
@@ -365,21 +369,20 @@ func (a *App) selectVariant() {
 		return
 	}
 
-	// Top-level nodes modify the experiment file directly — only affects
-	// the current experiment, so no warning needed.
+	// Top-level nodes modify the experiment file directly.
 	if node.SourceFilePath == a.expPath {
 		a.executeReassign(newValue)
 		return
 	}
 
 	// Deep node: reassignment modifies a shared config file.
-	if !a.cfg.Warnings.ShouldWarn(confirmReassign) {
+	if !a.cfg.Warnings.ShouldWarn(config.ConfirmReassign) {
 		a.executeReassign(newValue)
 		return
 	}
 
 	// Check if other experiments also use this config file.
-	allRefs, err := findFileReferences(a.confDir, node.SourceFilePath)
+	allRefs, err := hydra.FindFileReferences(a.confDir, node.SourceFilePath)
 	if err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
 		return
@@ -406,7 +409,7 @@ func (a *App) executeReassign(newValue string) {
 		return
 	}
 
-	if err := updateDefaultValue(node.SourceFilePath, node.RawKey, newValue); err != nil {
+	if err := hydra.UpdateDefaultValue(node.SourceFilePath, node.RawKey, newValue); err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
 		return
 	}
@@ -439,7 +442,7 @@ func (a *App) assignedExperimentName() string {
 // that reference the current variant before allowing reassignment.
 func (a *App) showReassignConfirm(currentVariant, newVariant string, otherRefs []string) {
 	a.pendingReassignValue = newVariant
-	a.pendingConfirmAction = confirmReassign
+	a.pendingConfirmAction = config.ConfirmReassign
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Reassign ",
 		borderColor: a.theme.ModalWarningBorder,
@@ -475,7 +478,7 @@ func (a *App) refreshCurrentViewer() {
 				a.updateViewerDiff(a.diffFromFile, currentPath)
 			} else {
 				variantPath := filepath.Join(a.variantDir, a.visibleVariantFiles[variantIdx]+".yaml")
-				a.updateViewer(&TreeNode{FilePath: variantPath})
+				a.updateViewer(&hydra.TreeNode{FilePath: variantPath})
 			}
 		}
 	}
@@ -544,18 +547,18 @@ func (a *App) setupKeybindings() {
 				switch event.Rune() {
 				case 'y', 'Y':
 					switch a.pendingConfirmAction {
-					case confirmDelete:
+					case config.ConfirmDelete:
 						a.executeDelete()
-					case confirmReassign:
+					case config.ConfirmReassign:
 						a.executeReassign(a.pendingReassignValue)
 						a.closeConfirm()
-					case confirmEdit:
+					case config.ConfirmEdit:
 						a.closeConfirm()
 						a.executeEditVariant()
-					case confirmRename:
+					case config.ConfirmRename:
 						a.closeConfirm()
 						a.showRenameInput()
-					case confirmUnassign:
+					case config.ConfirmUnassign:
 						a.executeUnassign()
 						a.closeConfirm()
 					}
@@ -618,10 +621,7 @@ func (a *App) setupKeybindings() {
 		}
 
 		// MAIN KEYBINDINGS — lookup-based dispatch
-		// Normalize: for special keys (non-KeyRune), tcell may set a non-zero
-		// rune (e.g. Enter → rune(13)), but our compiled bindings store rune=0
-		// for special keys. Clear the rune so the lookup matches.
-		id := keyID{Key: event.Key(), Rune: event.Rune()}
+		id := config.KeyID{Key: event.Key(), Rune: event.Rune()}
 		if id.Key != tcell.KeyRune {
 			id.Rune = 0
 		}
@@ -652,7 +652,6 @@ func (a *App) setupKeybindings() {
 }
 
 // dispatchGeneralAction handles actions from the general keybinding group.
-// Returns nil to consume the event, or the original event to pass through.
 func (a *App) dispatchGeneralAction(action string) *tcell.EventKey {
 	switch action {
 	case "quit":
@@ -712,7 +711,6 @@ func (a *App) dispatchBuilderAction(action string) *tcell.EventKey {
 }
 
 // dispatchVariantsAction handles actions from the variants keybinding group.
-// Most actions are skipped in diff mode.
 func (a *App) dispatchVariantsAction(action string) *tcell.EventKey {
 	if a.diffMode {
 		return &tcell.EventKey{}
@@ -810,7 +808,7 @@ func (a *App) scrollViewerUp() {
 }
 
 func (a *App) updateStatusBar() {
-	a.statusBarLeft.SetText(generateStatusBarText(a.currentPanelIdx, a.diffMode, a.bindings))
+	a.statusBarLeft.SetText(config.GenerateStatusBarText(a.currentPanelIdx, a.diffMode, a.bindings))
 }
 
 func modal(content tview.Primitive, width, height int) tview.Primitive {
@@ -829,7 +827,7 @@ func (a *App) showHelp() {
 	titles := map[int]string{0: " Builder Help ", 1: " Variants Help "}
 	helpView := tview.NewTextView().
 		SetDynamicColors(true).
-		SetText(generateHelpText(a.currentPanelIdx, a.bindings))
+		SetText(config.GenerateHelpText(a.currentPanelIdx, a.bindings))
 	helpView.SetBorder(true).
 		SetTitle(titles[a.currentPanelIdx]).
 		SetBorderColor(a.theme.ModalHelpBorder)
@@ -852,7 +850,7 @@ func (a *App) showReferences() {
 	}
 
 	variantName := a.visibleVariantFiles[idx]
-	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
+	refs, err := hydra.FindVariantReferences(a.confDir, a.variantDir, variantName)
 
 	a.refsOpen = true
 
@@ -945,8 +943,7 @@ func (a *App) duplicateVariant() {
 	a.populateVariants(a.selectedBuilderNode)
 }
 
-// showDeleteConfirm shows a confirmation modal for deleting the selected variant,
-// including the list of experiments that reference it.
+// showDeleteConfirm shows a confirmation modal for deleting the selected variant.
 func (a *App) showDeleteConfirm() {
 	idx := a.variantsPanel.GetCurrentItem()
 	if idx < 0 || idx >= len(a.visibleVariantFiles) {
@@ -954,9 +951,9 @@ func (a *App) showDeleteConfirm() {
 	}
 
 	a.pendingDeleteIdx = idx
-	a.pendingConfirmAction = confirmDelete
+	a.pendingConfirmAction = config.ConfirmDelete
 
-	if !a.cfg.Warnings.ShouldWarn(confirmDelete) {
+	if !a.cfg.Warnings.ShouldWarn(config.ConfirmDelete) {
 		a.executeDelete()
 		return
 	}
@@ -964,7 +961,7 @@ func (a *App) showDeleteConfirm() {
 	name := a.visibleVariantFiles[idx]
 
 	// Find all experiments referencing this variant (including current).
-	refs, err := findVariantReferences(a.confDir, a.variantDir, name)
+	refs, err := hydra.FindVariantReferences(a.confDir, a.variantDir, name)
 	if err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
 		return
@@ -998,7 +995,7 @@ func (a *App) executeDelete() {
 
 	// If the deleted variant was the active one, set value to "??"
 	if a.selectedBuilderNode != nil && a.selectedBuilderNode.Value == name {
-		if err := updateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, "??"); err != nil {
+		if err := hydra.UpdateDefaultValue(a.selectedBuilderNode.SourceFilePath, a.selectedBuilderNode.RawKey, "??"); err != nil {
 			a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
 		}
 
@@ -1017,9 +1014,7 @@ func (a *App) executeDelete() {
 }
 
 // unassignBuilderNode sets the selected builder node's value to "??" in the
-// config file, effectively unassigning the package without deleting any files.
-// For deep nodes (shared configs), a warning is shown if other experiments
-// reference the containing file.
+// config file, effectively unassigning the package.
 func (a *App) unassignBuilderNode() {
 	node := a.selectedBuilderNode
 	if node == nil || node.Value == "??" {
@@ -1032,13 +1027,13 @@ func (a *App) unassignBuilderNode() {
 		return
 	}
 
-	if !a.cfg.Warnings.ShouldWarn(confirmUnassign) {
+	if !a.cfg.Warnings.ShouldWarn(config.ConfirmUnassign) {
 		a.executeUnassign()
 		return
 	}
 
 	// Deep node: check who uses the containing file
-	allRefs, err := findFileReferences(a.confDir, node.SourceFilePath)
+	allRefs, err := hydra.FindFileReferences(a.confDir, node.SourceFilePath)
 	if err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
 		return
@@ -1055,7 +1050,7 @@ func (a *App) unassignBuilderNode() {
 		return
 	}
 
-	a.pendingConfirmAction = confirmUnassign
+	a.pendingConfirmAction = config.ConfirmUnassign
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Unassign ",
 		borderColor: a.theme.ModalWarningBorder,
@@ -1065,15 +1060,14 @@ func (a *App) unassignBuilderNode() {
 	})
 }
 
-// executeUnassign performs the actual unassign operation, setting the node
-// value to "??" and refreshing the UI.
+// executeUnassign performs the actual unassign operation.
 func (a *App) executeUnassign() {
 	node := a.selectedBuilderNode
 	if node == nil {
 		return
 	}
 
-	if err := updateDefaultValue(node.SourceFilePath, node.RawKey, "??"); err != nil {
+	if err := hydra.UpdateDefaultValue(node.SourceFilePath, node.RawKey, "??"); err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating config: %s[-]", err.Error()))
 		return
 	}
@@ -1092,7 +1086,7 @@ func (a *App) executeUnassign() {
 // closeConfirm closes the confirmation modal and resets pending state.
 func (a *App) closeConfirm() {
 	a.confirmOpen = false
-	a.pendingConfirmAction = confirmDelete
+	a.pendingConfirmAction = config.ConfirmDelete
 	a.pendingReassignValue = ""
 	a.pages.RemovePage("confirm")
 	a.app.SetFocus(a.panels[a.currentPanelIdx])
@@ -1109,8 +1103,7 @@ type warningModalConfig struct {
 }
 
 // showWarningModal displays a confirmation modal with a truncated list of
-// experiment references. It sets confirmOpen, adds a "confirm" page, and
-// focuses the modal.
+// experiment references.
 func (a *App) showWarningModal(cfg warningModalConfig) {
 	a.confirmOpen = true
 
@@ -1171,20 +1164,19 @@ func (a *App) showWarningModal(cfg warningModalConfig) {
 }
 
 // renameVariant checks for references before showing the rename input.
-// If other experiments reference the variant, a warning modal is shown first.
 func (a *App) renameVariant() {
 	idx := a.variantsPanel.GetCurrentItem()
 	if idx < 0 || idx >= len(a.visibleVariantFiles) {
 		return
 	}
 
-	if !a.cfg.Warnings.ShouldWarn(confirmRename) {
+	if !a.cfg.Warnings.ShouldWarn(config.ConfirmRename) {
 		a.showRenameInput()
 		return
 	}
 
 	variantName := a.visibleVariantFiles[idx]
-	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
+	refs, err := hydra.FindVariantReferences(a.confDir, a.variantDir, variantName)
 	if err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
 		return
@@ -1194,7 +1186,7 @@ func (a *App) renameVariant() {
 		return
 	}
 
-	a.pendingConfirmAction = confirmRename
+	a.pendingConfirmAction = config.ConfirmRename
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Rename ",
 		borderColor: a.theme.ModalWarningBorder,
@@ -1254,7 +1246,7 @@ func (a *App) executeRename(idx int, newName string) {
 	}
 
 	// Collect detailed refs BEFORE renaming the file on disk.
-	detailedRefs, err := findVariantReferencesDetailed(a.confDir, a.variantDir, oldName)
+	detailedRefs, err := hydra.FindVariantReferencesDetailed(a.confDir, a.variantDir, oldName)
 	if err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
 		a.closeRename()
@@ -1272,7 +1264,7 @@ func (a *App) executeRename(idx int, newName string) {
 
 	// Update all referencing YAML files.
 	for _, ref := range detailedRefs {
-		if err := updateDefaultValue(ref.SourceFilePath, ref.RawKey, newName); err != nil {
+		if err := hydra.UpdateDefaultValue(ref.SourceFilePath, ref.RawKey, newName); err != nil {
 			// Rollback file rename on failure.
 			_ = os.Rename(newPath, oldPath)
 			a.viewerPanel.SetText(fmt.Sprintf("[red]Error updating %s: %s[-]", ref.SourceFilePath, err.Error()))
@@ -1316,13 +1308,13 @@ func (a *App) editVariantInEditor() {
 		return
 	}
 
-	if !a.cfg.Warnings.ShouldWarn(confirmEdit) {
+	if !a.cfg.Warnings.ShouldWarn(config.ConfirmEdit) {
 		a.executeEditVariant()
 		return
 	}
 
 	variantName := a.visibleVariantFiles[idx]
-	refs, err := findVariantReferences(a.confDir, a.variantDir, variantName)
+	refs, err := hydra.FindVariantReferences(a.confDir, a.variantDir, variantName)
 	if err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error finding references: %s[-]", err.Error()))
 		return
@@ -1332,7 +1324,7 @@ func (a *App) editVariantInEditor() {
 		return
 	}
 
-	a.pendingConfirmAction = confirmEdit
+	a.pendingConfirmAction = config.ConfirmEdit
 	a.showWarningModal(warningModalConfig{
 		title:       " Confirm Edit ",
 		borderColor: a.theme.ModalWarningBorder,
@@ -1368,13 +1360,4 @@ func (a *App) executeEditVariant() {
 	}
 	a.refreshAll()
 	a.populateVariants(a.selectedBuilderNode)
-}
-
-func main() {
-	a := newApp()
-	a.app.SetRoot(a.pages, true).EnableMouse(false)
-	if err := a.app.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
 }
