@@ -39,11 +39,15 @@ func RestoreExpanded(roots []*TreeNode, expanded map[string]bool) {
 // producing the visible list of items for the builder panel.
 func FlattenTree(roots []*TreeNode) []*TreeNode {
 	var result []*TreeNode
-	for _, root := range roots {
-		result = append(result, root)
-		if root.Expanded && len(root.Children) > 0 {
-			result = append(result, FlattenTree(root.Children)...)
+	flattenInto(&result, roots)
+	return result
+}
+
+func flattenInto(result *[]*TreeNode, nodes []*TreeNode) {
+	for _, node := range nodes {
+		*result = append(*result, node)
+		if node.Expanded && len(node.Children) > 0 {
+			flattenInto(result, node.Children)
 		}
 	}
-	return result
 }

@@ -139,12 +139,13 @@ func resolveFileRecursive(filePath, confDir string, visited map[string]bool) (ma
 	// Accumulate resolved defaults
 	accumulated := make(map[string]interface{})
 	for _, entry := range entries {
-		if entry.Key == "_self_" {
-			continue
-		}
-
 		childPath := ResolveFilePath(entry, filePath, confDir)
 		childPath, _ = filepath.Abs(childPath)
+
+		// Skip entries whose resolved file doesn't exist (e.g. _self_).
+		if _, err := os.Stat(childPath); err != nil {
+			continue
+		}
 
 		if visited[childPath] {
 			continue // cycle — skip

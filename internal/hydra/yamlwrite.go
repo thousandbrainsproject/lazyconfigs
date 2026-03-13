@@ -14,12 +14,19 @@ import (
 func UpdateDefaultValue(filePath, rawKey, newValue string) error {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return err
+		return fmt.Errorf("reading %s: %w", filePath, err)
 	}
+
+	// Preserve original file permissions.
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", filePath, err)
+	}
+	mode := info.Mode()
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return err
+		return fmt.Errorf("parsing YAML in %s: %w", filePath, err)
 	}
 
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
@@ -90,5 +97,5 @@ func UpdateDefaultValue(filePath, rawKey, newValue string) error {
 	}
 	lines[lineIdx] = line[:colIdx] + newValue + line[colIdx+len(oldValue):]
 
-	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), 0644)
+	return os.WriteFile(filePath, []byte(strings.Join(lines, "\n")), mode)
 }

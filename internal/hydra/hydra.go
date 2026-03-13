@@ -1,6 +1,7 @@
 package hydra
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -47,7 +48,7 @@ func (node *TreeNode) PackageDir(confDir string) string {
 func ListVariants(dir string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading variant directory %s: %w", dir, err)
 	}
 
 	var names []string
@@ -68,9 +69,38 @@ func ListVariants(dir string) ([]string, error) {
 func ParseDefaults(filePath string) ([]DefaultEntry, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading defaults from %s: %w", filePath, err)
 	}
-	return ParseDefaultsFromData(data)
+	entries, err := ParseDefaultsFromData(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing defaults in %s: %w", filePath, err)
+	}
+	return entries, nil
+}
+
+// parseDefaultKey parses a raw key string (with optional @package and / prefix)
+// into a DefaultEntry with the given value.
+func parseDefaultKey(rawKey, value string) DefaultEntry {
+	entry := DefaultEntry{
+		RawKey: rawKey,
+		Value:  value,
+	}
+
+	key := rawKey
+	// Handle @ suffix — extract package path and strip from key
+	if atIdx := strings.Index(key, "@"); atIdx >= 0 {
+		entry.PackagePath = key[atIdx+1:]
+		key = key[:atIdx]
+	}
+
+	// Handle "/" prefix for absolute references
+	if strings.HasPrefix(key, "/") {
+		entry.Absolute = true
+		key = strings.TrimPrefix(key, "/")
+	}
+
+	entry.Key = key
+	return entry
 }
 
 // ParseDefaultsFromData extracts defaults entries from already-loaded YAML data.
@@ -92,41 +122,23 @@ func ParseDefaultsFromData(data []byte) ([]DefaultEntry, error) {
 
 	var entries []DefaultEntry
 	for _, item := range defaultsList {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		for k, v := range m {
-			val := ""
-			if v != nil {
-				switch vt := v.(type) {
-				case string:
-					val = vt
-				default:
-					continue
+		switch v := item.(type) {
+		case string:
+			// Bare string defaults entry, e.g.:
+			//   - hypotheses_updater/burst_sampling_10nn@learning_module_0.learning_module_args
+			entries = append(entries, parseDefaultKey(v, ""))
+		case map[string]interface{}:
+			for k, val := range v {
+				valStr := ""
+				if val != nil {
+					s, ok := val.(string)
+					if !ok {
+						continue
+					}
+					valStr = s
 				}
+				entries = append(entries, parseDefaultKey(k, valStr))
 			}
-
-			entry := DefaultEntry{
-				RawKey: k,
-			}
-
-			key := k
-			// Handle @ suffix — extract package path and strip from key
-			if atIdx := strings.Index(key, "@"); atIdx >= 0 {
-				entry.PackagePath = key[atIdx+1:]
-				key = key[:atIdx]
-			}
-
-			// Handle "/" prefix for absolute references
-			if strings.HasPrefix(key, "/") {
-				entry.Absolute = true
-				key = strings.TrimPrefix(key, "/")
-			}
-
-			entry.Key = key
-			entry.Value = val
-			entries = append(entries, entry)
 		}
 	}
 
@@ -176,6 +188,13 @@ func buildTreeRecursive(filePath, confDir string, depth int, parent *TreeNode, v
 
 	var nodes []*TreeNode
 	for _, entry := range entries {
+		// Only show "package: variant" style entries in the builder tree.
+		// Bare string entries (e.g. _self_, hypotheses_updater/burst@pkg)
+		// have no selectable variants and are handled only during resolution.
+		if entry.Value == "" {
+			continue
+		}
+
 		childPath := ResolveFilePath(entry, absPath, confDir)
 		childAbs, err := filepath.Abs(childPath)
 		if err != nil {

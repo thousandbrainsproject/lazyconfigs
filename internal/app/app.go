@@ -935,7 +935,13 @@ func (a *App) duplicateVariant() {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error reading file: %s[-]", err.Error()))
 		return
 	}
-	if err := os.WriteFile(dst, data, 0644); err != nil {
+	// Preserve source file permissions.
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		a.viewerPanel.SetText(fmt.Sprintf("[red]Error checking file: %s[-]", err.Error()))
+		return
+	}
+	if err := os.WriteFile(dst, data, srcInfo.Mode()); err != nil {
 		a.viewerPanel.SetText(fmt.Sprintf("[red]Error writing file: %s[-]", err.Error()))
 		return
 	}
