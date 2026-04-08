@@ -1,5 +1,5 @@
 // ABOUTME: File-based configuration system for the lazyconfigs TUI.
-// ABOUTME: Loads config from $HOME/.config/lazyconfigs/config.yaml with sensible defaults.
+// ABOUTME: Loads config from $XDG_CONFIG_HOME/lazyconfigs/config.yaml (fallback: ~/.config) with sensible defaults.
 package config
 
 import (
@@ -170,17 +170,22 @@ func defaultConfig() Config {
 	}
 }
 
-// LoadConfig reads config from $HOME/.config/lazyconfigs/config.yaml.
+// LoadConfig reads config from $XDG_CONFIG_HOME/lazyconfigs/config.yaml,
+// falling back to ~/.config if XDG_CONFIG_HOME is not set.
 // Missing file returns defaults. Parse errors warn to stderr and return defaults.
 func LoadConfig() Config {
 	cfg := defaultConfig()
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return cfg
+	configDir := os.Getenv("XDG_CONFIG_HOME")
+	if configDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return cfg
+		}
+		configDir = filepath.Join(home, ".config")
 	}
 
-	data, err := os.ReadFile(filepath.Join(home, ".config", "lazyconfigs", "config.yaml"))
+	data, err := os.ReadFile(filepath.Join(configDir, "lazyconfigs", "config.yaml"))
 	if err != nil {
 		return cfg
 	}
