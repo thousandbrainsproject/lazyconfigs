@@ -191,17 +191,27 @@ keybindings:
 ## Project Structure
 
 ```
-tui/
-  main.go       Core app: layout, panels, keybindings, modal management
-  config.go     Config loading, theme compilation, keybinding parsing
-  hydra.go      Hydra config tree parsing and variant reference discovery
-  resolve.go    Deep YAML merging and @package directive resolution
-  tree.go       Tree flattening and item rendering
-  viewer.go     Syntax highlighting and file/diff display
-  diff.go       Unified diff generation and colorization
-  search.go     Fuzzy search matching and filtered list management
-  yamlwrite.go  Structure-preserving YAML modification
-  Makefile      Build, install, clean, run targets
+cmd/
+  lazyconfigs/
+    main.go              Entry point
+internal/
+  app/
+    app.go               Core app: layout, panels, keybindings, modal management
+    search.go            Fuzzy search matching and filtered list management
+    viewer.go            Viewer panel logic
+  config/
+    config.go            Config loading, theme compilation, keybinding parsing
+  hydra/
+    hydra.go             Hydra config tree parsing and variant reference discovery
+    resolve.go           Deep YAML merging and @package directive resolution
+    tree.go              Tree flattening and item rendering
+    yamlwrite.go         Structure-preserving YAML modification
+  ui/
+    diff.go              Unified diff generation and colorization
+    highlight.go         Syntax highlighting
+    render.go            UI rendering helpers
+  version/
+    version.go           Version info
 ```
 
 ## License
