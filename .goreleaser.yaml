@@ -1,0 +1,55 @@
+version: 2
+
+project_name: lazyconfigs
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/lazyconfigs
+    binary: lazyconfigs
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X lazyconfigs/internal/version.Version={{ .Version }}
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^ci:"
+
+brews:
+  - repository:
+      owner: thousandbrainsproject
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/thousandbrainsproject/lazyconfigs"
+    description: "TUI for browsing and editing Hydra/YAML configs"
+    license: "MIT"
+    install: |
+      bin.install "lazyconfigs"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/lazyconfigs --version")
+
+release:
+  github:
+    owner: thousandbrainsproject
+    name: lazyconfigs

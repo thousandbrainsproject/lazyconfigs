@@ -1,4 +1,5 @@
 package version
 
 // Version is the current application version.
-const Version = "0.0.1"
+// Overridden at build time via ldflags by GoReleaser.
+var Version = "dev"

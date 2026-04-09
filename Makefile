@@ -2,9 +2,11 @@
 
 BINARY_NAME=lazyconfigs
 INSTALL_PATH=$(HOME)/.local/bin
+VERSION ?= dev
+LDFLAGS=-s -w -X lazyconfigs/internal/version.Version=$(VERSION)
 
 build:
-	go build -o $(BINARY_NAME) ./cmd/lazyconfigs
+	go build -ldflags "$(LDFLAGS)" -o $(BINARY_NAME) ./cmd/lazyconfigs
 
 install: build
 	mkdir -p $(INSTALL_PATH)
