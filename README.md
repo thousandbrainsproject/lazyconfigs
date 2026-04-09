@@ -36,7 +36,7 @@ A TUI for browsing and managing Hydra configuration hierarchies. Built for the T
 
 ```bash
 brew tap thousandbrainsproject/tap
-brew install lazyconfigs
+brew install --cask lazyconfigs
 ```
 
 ### Build from source
