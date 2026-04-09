@@ -1,6 +1,6 @@
 # lazyconfigs
 
-A lazygit-inspired TUI for browsing and managing Hydra configuration hierarchies. Built for the Thousand Brains Project's Monty experiment configs.
+A TUI for browsing and managing Hydra configuration hierarchies. Built for the Thousand Brains Project's Monty experiment configs.
 
 ```
 ╭─ [1] Builder ──────────╮╭─ Viewer ────────────────────────────────╮
@@ -20,39 +20,52 @@ A lazygit-inspired TUI for browsing and managing Hydra configuration hierarchies
 
 ## Features
 
-- **Hierarchical tree browser** -- expand/collapse Hydra config nodes
-- **Variant management** -- select, rename, duplicate, delete, and edit variants
-- **Unified diff** -- compare two variants side-by-side with colored output
-- **Resolved view** -- see fully merged Hydra configuration (all defaults applied)
-- **Fuzzy search** -- filter builder items or variants with incremental fuzzy matching
-- **Reference tracking** -- see which experiments use a given variant before modifying it
-- **Confirmation warnings** -- modal warnings before destructive cross-experiment changes
-- **Syntax highlighting** -- YAML viewer with configurable Chroma styles
-- **Fully configurable** -- colors, keybindings, warnings, and editor via YAML config
+- Browse Hydra config trees, expand/collapse nodes
+- Select, rename, duplicate, delete, and edit variants
+- Diff two variants side-by-side with colored output
+- Toggle a resolved view to see the fully merged config with all defaults applied
+- Fuzzy search over builder items and variants
+- Check which experiments reference a variant before you modify it
+- Warnings before destructive actions that affect other experiments
+- YAML syntax highlighting (configurable Chroma styles)
+- Colors, keybindings, warnings, and editor are all configurable via YAML
 
 ## Installation
 
-Requires **Go 1.22+**.
+### Homebrew (macOS and Linux)
 
 ```bash
-cd tui
+brew tap thousandbrainsproject/tap
+brew install lazyconfigs
+```
+
+### Build from source
+
+You need Go 1.22 or later.
+
+```bash
+git clone https://github.com/thousandbrainsproject/lazyconfigs.git
+cd lazyconfigs
 make install    # builds and copies binary to ~/.local/bin/
 ```
+
+Make sure `~/.local/bin` is in your `PATH`.
 
 Other make targets:
 
 ```bash
 make build      # build the binary locally
 make run        # build and run
+make test       # run unit tests
 make clean      # remove built binary
 ```
 
 ## Usage
 
-Run `lazyconfigs` from within a git repository that contains Hydra configs:
+Run `lazyconfigs` from within a git repository that contains TBP Hydra configs:
 
 ```bash
-cd /path/to/your/project
+cd ~/tbp/tbp.monty
 lazyconfigs
 ```
 
@@ -68,7 +81,7 @@ By default, lazyconfigs walks up from the current directory to find the git root
 
 ## Configuration
 
-Create `~/.config/lazyconfigs/config.yaml` to customize behavior. All fields are optional -- omitted values use the defaults shown below.
+Config lives at `$XDG_CONFIG_HOME/lazyconfigs/config.yaml` (defaults to `~/.config/lazyconfigs/config.yaml`). All fields are optional -- omitted values use the defaults shown below.
 
 ```yaml
 # Path to the Hydra config directory. Supports environment variables.
@@ -139,13 +152,6 @@ keybindings:
     references: "Enter"
 ```
 
-### Configuration notes
-
-- **`conf_dir`** supports environment variables (e.g. `$PROJECT_ROOT/src/tbp/monty/conf`). When empty, the app finds the git root and uses the default path.
-- **Warnings** use `*bool` semantics -- omitted fields default to `true`. Set explicitly to `false` to disable.
-- **Colors** accept any value tview understands: named colors (`red`, `green`, `yellow`, `default`) or hex (`#rrggbb`).
-- **Keybindings** are grouped by context. Builder and variant bindings take priority over general bindings when their panel is focused. Modal keybindings (`y`/`n`/`Esc` in confirmations) are not configurable.
-
 ## Keybinding Reference
 
 ### General (all panels)
@@ -200,4 +206,4 @@ tui/
 
 ## License
 
-Thousand Brains Project -- internal tooling.
+MIT -- see [LICENSE](LICENSE).
