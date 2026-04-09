@@ -5,16 +5,16 @@ A TUI for browsing and managing Hydra configuration hierarchies. Built for the T
 ```
 ╭─ [1] Builder ──────────╮╭─ Viewer ────────────────────────────────╮
 │ ▼ /monty: informed_5   ││                                         │
-│   ▶ motor_system_config ││  sensor_module: camera                  │
-│   ▶ sensor_module       ││  resolution: 640                        │
-│     learning_module: x  ││  frame_rate: 30                         │
-│                         ││  ...                                    │
-╰─────────────────────────╯│                                         │
-╭─ [2] Variants ──────────╮│                                         │
-│ * default               ││                                         │
-│   variant_a             ││                                         │
-│   variant_b             ││                                         │
-╰─────────────────────────╯╰─────────────────────────────────────────╯
+│   ▶ motor_system_config││  sensor_module: camera                  │
+│   ▶ sensor_module      ││  resolution: 640                        │
+│     learning_module: x ││  frame_rate: 30                         │
+│                        ││  ...                                    │
+╰────────────────────────╯│                                         │
+╭─ [2] Variants ─────────╮│                                         │
+│ * default              ││                                         │
+│   variant_a            ││                                         │
+│   variant_b            ││                                         │
+╰────────────────────────╯╰─────────────────────────────────────────╯
  Navigate: j/k | Expand: Enter | Help: ?     Thousand Brains Project 0.0.1
 ```
 
