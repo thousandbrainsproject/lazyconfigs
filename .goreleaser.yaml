@@ -21,7 +21,8 @@ builds:
       - -s -w -X lazyconfigs/internal/version.Version={{ .Version }}
 
 archives:
-  - format: tar.gz
+  - formats:
+      - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
@@ -35,19 +36,21 @@ changelog:
       - "^chore:"
       - "^ci:"
 
-brews:
-  - repository:
+homebrew_casks:
+  - name: lazyconfigs
+    repository:
       owner: thousandbrainsproject
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/thousandbrainsproject/lazyconfigs"
     description: "TUI for browsing and editing Hydra/YAML configs"
-    license: "MIT"
-    install: |
-      bin.install "lazyconfigs"
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/lazyconfigs --version")
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/lazyconfigs"]
+          end
 
 release:
   github:

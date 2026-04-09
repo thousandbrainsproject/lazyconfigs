@@ -4,7 +4,7 @@ conf/
 .envrc
 CLAUDE.md
 
-lazyconfigs
+/lazyconfigs
 
 coverage.out
 dist/
